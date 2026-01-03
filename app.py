@@ -10,7 +10,7 @@ import time
 # --- 1. 頁面初始設定 ---
 st.set_page_config(page_title="114學年度體育成績管理系統", layout="wide", page_icon="🏆")
 
-# --- 2. 登入權限管理 (完全保留您的核心安全邏輯) ---
+# --- 2. 登入權限管理 (核心安全邏輯不變) ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -29,39 +29,44 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- 3. AI 模型初始化 (使用您指定的 2.5 版本) ---
+# --- 3. AI 模型初始化 ---
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
     MODEL_ID = "models/gemini-2.5-flash" 
 else:
     st.error("❌ 找不到 API_KEY"); st.stop()
 
-# --- 4. 資料連線與快取 (整合所有分頁) ---
+# --- 4. 資料連線與快取優化 (解決 429 錯誤的關鍵) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-@st.cache_data(ttl=5)
+# 將快取時間延長至 600 秒，避免頻繁讀取 Sheets API
+@st.cache_data(ttl=600)
 def load_all_data():
     try:
-        # 同時讀取管理系統與 AI 分析所需的所有分頁
-        s_df = conn.read(worksheet="Scores", ttl="0s").astype(str)
-        sl_df = conn.read(worksheet="Student_List", ttl="0s").astype(str)
-        n_df = conn.read(worksheet="Norms_Settings", ttl="0s").astype(str)
-        c_df = conn.read(worksheet="AI_Criteria", ttl="0s").astype(str)
+        # 移除 ttl="0s"，讓系統在 10 分鐘內只讀取一次
+        s_df = conn.read(worksheet="Scores").astype(str)
+        sl_df = conn.read(worksheet="Student_List").astype(str)
+        n_df = conn.read(worksheet="Norms_Settings").astype(str)
+        c_df = conn.read(worksheet="AI_Criteria").astype(str)
         try:
-            h_df = conn.read(worksheet="Analysis_Results", ttl="0s").astype(str)
+            h_df = conn.read(worksheet="Analysis_Results").astype(str)
         except:
             h_df = pd.DataFrame()
             
-        # 清理欄位名稱空格 (您的核心清理邏輯)
         for df in [s_df, sl_df, n_df, c_df, h_df]:
             if not df.empty: df.columns = df.columns.astype(str).str.strip()
         return s_df, sl_df, n_df, c_df, h_df
     except Exception as e:
-        st.error(f"資料讀取失敗：{e}"); st.stop()
+        # 針對 API 限額錯誤提供友善提示
+        if "429" in str(e):
+            st.error("🚫 Google 讀取次數已達上限，請等待一分鐘後重新載入。")
+        else:
+            st.error(f"資料讀取失敗：{e}")
+        st.stop()
 
 scores_df, student_list, norms_settings_df, ai_criteria_df, ai_history = load_all_data()
 
-# --- 5. 核心判定引擎 (完全恢復您的精密運算邏輯) ---
+# --- 5. 核心判定引擎 (精密運算邏輯不變) ---
 def clean_numeric_string(val):
     if pd.isna(val) or val == 'nan' or val == "": return ""
     s = str(val).strip()
@@ -104,12 +109,18 @@ def universal_judge(category, item, gender, age, value, norms_df):
     except: pass
     return "待加強"
 
-# --- 6. 側邊欄與資料清理 ---
+# --- 6. 側邊欄與同步功能 ---
 scores_df = scores_df.map(clean_numeric_string)
 student_list = student_list.map(clean_numeric_string)
 
 with st.sidebar:
     st.header("👤 學生與項目選擇")
+    
+    # 新增同步按鈕：只有點擊時才會清除快取並重新讀取 Sheets
+    if st.button("🔄 同步雲端資料"):
+        st.cache_data.clear()
+        st.rerun()
+
     if not student_list.empty:
         cl_list = sorted(student_list['班級'].unique())
         sel_class = st.selectbox("🏫 選擇班級", cl_list)
@@ -118,7 +129,6 @@ with st.sidebar:
         sel_no = st.selectbox("🔢 選擇座號", no_list)
         stu = stu_df[stu_df['座號'] == sel_no].iloc[0]
         
-        # 自動跨表抓取性別與年齡
         g_col = next((c for c in student_list.columns if "性" in c), "性別")
         sel_gender = str(stu[g_col]).strip()
         st.info(f"📌 {stu['姓名']} | {sel_gender} | {stu['年齡']}歲")
@@ -128,7 +138,7 @@ with st.sidebar:
 st.title("🏆 114學年度體育成績管理與 AI 智慧平台")
 mode = st.radio("🎯 功能切換", ["一般術科測驗", "114年體適能", "🚀 AI 智慧診斷教學", "📊 數據報表查詢"], horizontal=True)
 
-# [A. 一般術科測驗] 保留您所有的自動換算與即時紀錄
+# [A. 一般術科測驗]
 if mode == "一般術科測驗":
     col1, col2 = st.columns(2)
     with col1:
@@ -150,7 +160,6 @@ if mode == "一般術科測驗":
     final_medal = universal_judge("一般術科", test_item, sel_gender, 0, final_score, norms_settings_df) if auto_j else manual_m
     note = st.text_input("💬 備註", "")
     
-    # 即時顯示近期紀錄 (補回原本功能)
     st.write("🕒 **近期紀錄：**")
     recent = scores_df[(scores_df['姓名'] == stu['姓名']) & (scores_df['項目'] == test_item)]
     if not recent.empty: st.dataframe(recent[['紀錄時間', '成績', '等第/獎牌']].tail(3), use_container_width=True)
@@ -174,18 +183,15 @@ elif mode == "114年體適能":
         final_score, fmt = "N/A", "特殊判定"
         final_medal, note = ("銅牌" if "身障" in status else "待加強"), status
 
-# [C. 🚀 AI 智慧診斷教學] 解決 AI 幻想的核心：直接餵入資料庫文字
+# [C. 🚀 AI 智慧診斷教學] 
 elif mode == "🚀 AI 智慧診斷教學":
     st.subheader(f"📹 {stu['姓名']} - 影像分析與技術診斷")
-    
-    # 找尋該學生已有的成績紀錄供 AI 參考
     available_tests = scores_df[scores_df['姓名'] == stu['姓名']]['項目'].unique().tolist()
     sel_test_ai = st.selectbox("1. 選擇要分析的項目", available_tests if available_tests else ["先記錄成績後再來診斷"])
     
     if sel_test_ai in available_tests:
-        # 抓取技術指標與常模 (這一步是防止 AI 幻想的關鍵)
         cri_row = ai_criteria_df[ai_criteria_df["測驗項目"].str.strip() == sel_test_ai.strip()]
-        relevant_norms = norms_settings_df[norms_settings_df['項目名稱'] == sel_test_ai].to_string() # 轉為文字直接餵給 AI
+        relevant_norms = norms_settings_df[norms_settings_df['項目名稱'] == sel_test_ai].to_string() 
         
         if cri_row.empty:
             st.error(f"❌ AI_Criteria 中找不到項目：{sel_test_ai}"); st.stop()
@@ -213,7 +219,6 @@ elif mode == "🚀 AI 智慧診斷教學":
                         video_file = genai.upload_file(path=temp_path)
                         while video_file.state.name == "PROCESSING": time.sleep(2); video_file = genai.get_file(video_file.name)
                         
-                        # 嚴謹的 Prompt：強制 AI 依照輸入的文字常模說話
                         full_prompt = f"""
                         你是專業體育術科專家。請完全依照以下資料庫數據對【{stu['姓名']}】進行評估：
                         - 登記性別：{sel_gender}
@@ -249,7 +254,7 @@ elif mode == "🚀 AI 智慧診斷教學":
             conn.update(worksheet="Analysis_Results", data=updated_h)
             st.success("✅ 診斷報告已存檔！")
 
-# [D. 數據報表查詢] 完全保留您的編輯與下載功能
+# [D. 數據報表查詢] 
 elif mode == "📊 數據報表查詢":
     tab1, tab2, tab3 = st.tabs(["👤 個人成績", "👥 班級總覽", "⚙️ 系統管理"])
     with tab1:
@@ -263,9 +268,9 @@ elif mode == "📊 數據報表查詢":
         edited = st.data_editor(norms_settings_df, num_rows="dynamic")
         if st.button("💾 同步更新常模"):
             conn.update(worksheet="Norms_Settings", data=edited)
-            st.success("常模已更新！"); st.rerun()
+            st.success("常模已更新！"); st.cache_data.clear(); st.rerun()
 
-# --- 8. 存檔邏輯 (恢復您的「覆蓋/更新」核心機制) ---
+# --- 8. 存檔邏輯 (覆蓋/更新核心機制) ---
 if mode in ["一般術科測驗", "114年體適能"]:
     st.divider()
     existing_mask = (scores_df['姓名'] == stu['姓名']) & (scores_df['項目'] == test_item)
@@ -280,13 +285,14 @@ if mode in ["一般術科測驗", "114年體適能"]:
             "顯示格式": fmt, "等第/獎牌": final_medal, "備註": note
         }
         if existing_mask.any():
-            # 找到索引並精確覆蓋 (您的原始邏輯)
             for k, v in new_row.items(): scores_df.loc[existing_mask, k] = str(v)
             final_df = scores_df
         else:
             final_df = pd.concat([scores_df, pd.DataFrame([new_row])], ignore_index=True)
         
         conn.update(worksheet="Scores", data=final_df.map(clean_numeric_string))
+        # 存檔後主動清除快取，確保下次讀取是最新資料
+        st.cache_data.clear()
         st.balloons(); st.success("✅ 成績紀錄已成功存檔！"); st.rerun()
 
 if st.sidebar.button("🚪 登出系統"):
