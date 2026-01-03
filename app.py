@@ -13,7 +13,7 @@ st.markdown("##### 結合現場實測數據與 AI 影像動作分析的專業教
 # API 安全金鑰初始化
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    MODEL_ID = "gemini-1.5-flash" 
+    MODEL_ID = "gemini-2.5-flash" 
 else:
     st.error("❌ 找不到 GOOGLE_API_KEY，請在 Streamlit Secrets 中設定。")
     st.stop()
