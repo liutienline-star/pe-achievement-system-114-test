@@ -13,7 +13,7 @@ st.title("🏆 術科 AI 智慧教學與管理平台")
 # API 安全金鑰
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    MODEL_ID = "models/gemini-2.5-flash" 
+    MODEL_ID = "models/gemini-1.5-flash" 
 else:
     st.error("❌ 找不到 API_KEY"); st.stop()
 
@@ -26,31 +26,24 @@ def load_all_sheets():
         df_c = conn.read(worksheet="AI_Criteria")
         df_n = conn.read(worksheet="Norms_Settings")
         df_s = conn.read(worksheet="Scores")
-        # 嘗試讀取歷史紀錄，若無則回傳空表
+        df_sl = conn.read(worksheet="Student_List") # <--- 新增：讀取學生名單
         try:
             df_h = conn.read(worksheet="Analysis_Results")
         except:
             df_h = pd.DataFrame()
         
-        for df in [df_c, df_n, df_s, df_h]:
+        # 清理所有欄位名稱的空格
+        for df in [df_c, df_n, df_s, df_sl, df_h]:
             if not df.empty:
-                df.columns = df.columns.str.strip()
-        return df_c, df_n, df_s, df_h
+                df.columns = df.columns.astype(str).str.strip()
+        return df_c, df_n, df_s, df_sl, df_h
     except Exception as e:
-        st.error(f"資料讀取失敗：{e}"); return None, None, None, None
+        st.error(f"資料讀取失敗，請確認工作表名稱：{e}"); return None, None, None, None, None
 
-df_criteria, df_norms, df_scores, df_history = load_all_sheets()
-
-# --- 項目拍攝指南 (第 4 項功能) ---
-SHOOTING_GUIDE = {
-    "排球": "📷 建議角度：側面 45 度。需捕捉到從『準備』到『擊球』的完整動作。",
-    "跳遠": "📷 建議角度：正側面。相機高度與腰部同高，需拍到『起跳』與『落點』。",
-    "仰臥起坐": "📷 建議角度：正側面。需清楚看見背部著地與手肘碰膝動作。",
-    "預設": "📷 建議角度：請確保光線充足，主體位於畫面中央。"
-}
+df_criteria, df_norms, df_scores, df_student_list, df_history = load_all_sheets()
 
 # --- 3. 系統核心邏輯 ---
-if df_scores is not None and df_criteria is not None:
+if df_scores is not None and df_student_list is not None:
     # A. 側邊欄：學生選擇
     with st.sidebar:
         st.header("👤 學生與項目選擇")
@@ -61,64 +54,69 @@ if df_scores is not None and df_criteria is not None:
         class_students = df_scores[df_scores["班級"] == sel_class]
         sel_name = st.selectbox("2. 選擇學生", class_students["姓名"].unique().tolist())
         
-        student_data = class_students[class_students["姓名"] == sel_name]
-        sel_test = st.selectbox("3. 選擇項目", student_data["項目"].unique().tolist())
+        student_records = class_students[class_students["姓名"] == sel_name]
+        sel_test = st.selectbox("3. 選擇項目", student_records["項目"].unique().tolist())
         
-        current_record = student_data[student_data["項目"] == sel_test].iloc[0]
-        raw_score_val = current_record["成績"]
-        sel_gender = current_record["性別"] if "性別" in current_record else "未註記"
+        # --- 跨表抓取性別邏輯 ---
+        student_info = df_student_list[df_student_list["姓名"] == sel_name]
+        if not student_info.empty:
+            # 尋找包含「性」字的欄位
+            g_col = next((c for c in df_student_list.columns if "性" in c), None)
+            sel_gender = str(student_info.iloc[0][g_col]).strip() if g_col else "未註記"
+        else:
+            sel_gender = "未註記"
+            st.warning(f"⚠️ 在 Student_List 中找不到【{sel_name}】的資料")
 
-        # --- 第 2 項功能：歷史進步對照 ---
+        # 抓取實測數據
+        current_record = student_records[student_records["項目"] == sel_test].iloc[0]
+        raw_score_val = current_record["成績"]
+
         st.divider()
-        st.subheader("⏳ 歷史進步對照")
+        st.subheader("⏳ 歷史紀錄對照")
         if not df_history.empty:
             past = df_history[(df_history["姓名"] == sel_name) & (df_history["項目"] == sel_test)]
             if not past.empty:
-                st.write(f"已累積 {len(past)} 次紀錄")
                 st.dataframe(past[["時間", "最終得分"]].tail(3), hide_index=True)
-            else:
-                st.caption("尚無歷史數據")
 
     # B. 提取 AI 指標
     target_test = sel_test.strip()
-    matching_rows = df_criteria[df_criteria["測驗項目"].str.strip() == target_test]
+    match_rows = df_criteria[df_criteria["測驗項目"].str.strip() == target_test]
+    if match_rows.empty:
+        st.error(f"❌ 在 AI_Criteria 找不到項目：{target_test}"); st.stop()
     
-    if matching_rows.empty:
-        st.error(f"❌ 找不到項目：【{target_test}】"); st.stop()
+    match_row = match_rows.iloc[0]
     
-    match_row = matching_rows.iloc[0]
-    unit = next((match_row[col] for col in df_criteria.columns if "Unit" in col), "")
-    logic = next((match_row[col] for col in df_criteria.columns if "Logic" in col), "")
-    indicators = next((match_row[col] for col in df_criteria.columns if "Indicators" in col), "")
-    cues = next((match_row[col] for col in df_criteria.columns if "Cues" in col), "")
+    def get_c_val(key):
+        col = next((c for c in df_criteria.columns if key in c), None)
+        return match_row[col] if col else ""
+
+    unit = get_c_val("Unit")
+    logic = get_c_val("Logic")
+    indicators = get_c_val("Indicators")
+    cues = get_c_val("Cues")
     relevant_norms = df_norms[df_norms["項目名稱"].str.strip() == target_test]
 
     # C. 介面呈現
     col_info, col_video = st.columns([1, 1.5])
     with col_info:
-        st.subheader("📊 數據摘要")
+        st.subheader("📊 診斷對象資料")
         st.metric(label=f"實測成績 ({unit})", value=f"{raw_score_val}")
-        st.info(f"受測性別：{sel_gender}")
-        with st.expander("📈 查看參考常模"):
+        st.info(f"姓名：{sel_name}\n\n資料庫性別：**{sel_gender}**")
+        with st.expander("📈 參考常模標準"):
             st.dataframe(relevant_norms, hide_index=True)
 
     with col_video:
-        st.subheader("📹 影像診斷")
-        # 第 4 項：拍攝指南
-        guide_msg = SHOOTING_GUIDE["預設"]
-        for key in SHOOTING_GUIDE:
-            if key in sel_test: guide_msg = SHOOTING_GUIDE[key]; break
-        st.warning(guide_msg)
-        
-        uploaded_v = st.file_uploader("上傳動作影片", type=["mp4", "mov"])
+        st.subheader("📹 動作影像")
+        st.caption("📷 提示：請確保拍攝角度能清楚看見關鍵技術動作。")
+        uploaded_v = st.file_uploader("上傳影片", type=["mp4", "mov"])
         if uploaded_v: st.video(uploaded_v)
 
-    # D. 分析過程
-    if st.button(f"🚀 啟動 AI 綜評"):
+    # D. AI 分析 (含視覺偵測提示)
+    if st.button(f"🚀 開始 AI 綜合診斷"):
         if not uploaded_v:
             st.warning("請先上傳影片。")
         else:
-            with st.spinner("AI 診斷中..."):
+            with st.spinner("AI 正在進行影像分析與性別比對..."):
                 try:
                     temp_path = "temp.mp4"
                     with open(temp_path, "wb") as f: f.write(uploaded_v.read())
@@ -126,60 +124,62 @@ if df_scores is not None and df_criteria is not None:
                     while video_file.state.name == "PROCESSING": time.sleep(2); video_file = genai.get_file(video_file.name)
                     
                     full_prompt = f"""
-                    診斷對象：{sel_gender} / 項目：{sel_test} / 數據：{raw_score_val} {unit}
-                    常模參考：{relevant_norms.to_string()}
-                    技術指標：{indicators}
-                    權重邏輯：{logic}
-                    任務：核對性別、計算數據分與技術分、給予突破處方。
+                    你是一位專業的體育術科評分專家。
+                    
+                    【基本資料庫訊息】
+                    - 學生姓名：{sel_name}
+                    - 登記性別：{sel_gender}
+                    - 項目：{sel_test} / 成績：{raw_score_val} {unit}
+
+                    【任務要求】
+                    1. **身份與性別核對**：
+                       - 請從視覺特徵判斷影片中人物的性別。
+                       - 如果影片中的性別與資料庫登記的「{sel_gender}」明顯不同，請在報告最開頭加入警示語：「⚠️ 警示：影像性別特徵與資料庫登記（{sel_gender}）不符，請確認是否上傳正確影片。」
+                    
+                    2. **專業評分**：
+                       - 數據評分參考：{relevant_norms.to_string()}
+                       - 技術分析參考：{indicators}
+                       - 權重計分邏輯：{logic}
+                    
+                    3. **教學處方**：參考以下重點：{cues}
                     """
                     model = genai.GenerativeModel(MODEL_ID)
                     response = model.generate_content([video_file, full_prompt])
                     
                     st.session_state['report'] = response.text
                     st.session_state['done'] = True
+                    st.divider()
                     st.markdown(response.text)
                     
                     genai.delete_file(video_file.name); os.remove(temp_path)
-                except Exception as e: st.error(f"分析失敗：{e}")
+                except Exception as e: st.error(f"分析出錯：{e}")
 
-    # --- 第 5 項：老師校準區 ---
+    # E. 老師校準與回寫
     if st.session_state.get('done'):
         st.divider()
-        st.subheader("👨‍🏫 老師專業校準")
-        t_note = st.text_area("給學生的額外評語", key="teacher_note")
-        t_score = st.text_input("老師修正總分 (如不修正請留空)", key="teacher_score")
+        st.subheader("👨‍🏫 老師校準與存檔")
+        t_note = st.text_area("補充評語")
+        t_score = st.text_input("最終修正分數 (選填)")
 
-        # --- 第 1 項：回寫功能 (修復版) ---
-        if st.button("💾 確認並回寫至 Google Sheets"):
+        if st.button("💾 確認回寫至 Google Sheets"):
             try:
-                # 1. 建立當前這筆新資料
-                new_entry = {
+                new_row = {
                     "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    "班級": sel_class,
-                    "姓名": sel_name,
-                    "項目": sel_test,
+                    "班級": sel_class, "姓名": sel_name, "項目": sel_test,
                     "最終得分": t_score if t_score else "見AI報告",
-                    "AI診斷報告": st.session_state['report'],
-                    "老師評語": t_note
+                    "AI診斷報告": st.session_state['report'], "老師評語": t_note
                 }
-                new_df = pd.DataFrame([new_entry])
-
-                # 2. 讀取現有歷史紀錄並合併 (實現 Append)
+                new_df = pd.DataFrame([new_row])
                 try:
-                    current_history = conn.read(worksheet="Analysis_Results")
-                    # 清理欄位空格避免合併出錯
-                    current_history.columns = current_history.columns.str.strip()
-                    updated_df = pd.concat([current_history, new_df], ignore_index=True)
+                    hist = conn.read(worksheet="Analysis_Results")
+                    hist.columns = hist.columns.str.strip()
+                    updated = pd.concat([hist, new_df], ignore_index=True)
                 except:
-                    # 如果讀取失敗 (例如表完全是空的)，就只用新資料
-                    updated_df = new_df
+                    updated = new_df
                 
-                # 3. 使用 update 覆蓋回原分頁
-                conn.update(worksheet="Analysis_Results", data=updated_df)
-                
-                st.success("✅ 數據已成功追加至 Analysis_Results 分頁！")
-                st.cache_data.clear() # 清除快取以便下次讀取到最新資料
-            except Exception as e:
-                st.error(f"回寫失敗：{e}")
+                conn.update(worksheet="Analysis_Results", data=updated)
+                st.success("✅ 資料已成功存入 Analysis_Results！")
+                st.cache_data.clear()
+            except Exception as e: st.error(f"存檔失敗：{e}")
 else:
-    st.warning("請確認 Google Sheets 工作表連線。")
+    st.warning("請確保工作表中有 Scores 與 Student_List 分頁。")
