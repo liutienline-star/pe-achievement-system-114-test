@@ -13,7 +13,7 @@ st.title("🏆 術科 AI 智慧教學與管理平台")
 # API 安全金鑰
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    MODEL_ID = "models/gemini-1.5-flash" 
+    MODEL_ID = "models/gemini-2.5-flash" 
 else:
     st.error("❌ 找不到 API_KEY"); st.stop()
 
