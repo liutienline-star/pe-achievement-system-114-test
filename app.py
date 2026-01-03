@@ -1,83 +1,112 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import google.generativeai as genai
 import os
 import time
 
-# --- 1. 頁面基礎設定 ---
-st.set_page_config(page_title="跳繩 AI 測試診斷", page_icon="💪")
+# --- 1. 頁面設定 ---
+st.set_page_config(page_title="114學年度術科 AI 診斷系統", layout="wide")
+st.title("🏆 體育術科專業 AI 診斷系統")
+st.caption("連線狀態：已掛載 Google Sheets 動態指標資料庫")
 
-st.title("📹 跳繩動作 AI 診斷測試")
-st.info("本版本使用 Gemini 2.5 Flash 模型，專門測試影片分析功能。")
-
-# --- 2. API 金鑰與模型設定 ---
+# --- 2. API 與資料連線 ---
+# AI 設定
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # 使用您清單中排名第 0 號的穩定版模型
     MODEL_ID = "models/gemini-2.5-flash"
 else:
-    st.error("❌ 找不到 GOOGLE_API_KEY，請檢查 Streamlit Secrets 設定。")
+    st.error("❌ 找不到 GOOGLE_API_KEY")
     st.stop()
 
-# --- 3. 影片上傳介面 ---
-uploaded_video = st.file_uploader("請上傳學生跳繩影片 (支援 mp4, mov)", type=["mp4", "mov"])
+# GSheets 連線
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-if uploaded_video:
-    st.video(uploaded_video)
+@st.cache_data(ttl=60)  # 每分鐘更新一次，方便老師修改 Sheet 後快速生效
+def get_ai_criteria():
+    try:
+        df = conn.read(worksheet="AI_Criteria")
+        return df
+    except Exception as e:
+        st.error(f"無法讀取 AI_Criteria 分頁：{e}")
+        return None
+
+criteria_df = get_ai_criteria()
+
+# --- 3. 介面與邏輯 ---
+if criteria_df is not None:
+    # 讓老師選擇科目（名稱會跟著 Sheet 變動）
+    test_list = criteria_df["測驗項目"].tolist()
+    selected_test = st.selectbox("🎯 請選擇要診斷的術科項目", test_list)
     
-    if st.button("🚀 開始分析影片"):
-        try:
-            # A. 建立暫存檔
-            temp_path = "temp_test_video.mp4"
-            with open(temp_path, "wb") as f:
-                f.write(uploaded_video.read())
-            
-            # B. 上傳至 Google AI 伺服器
-            with st.spinner("1/3 正在將影片傳送至 AI 教練..."):
-                video_file = genai.upload_file(path=temp_path)
-            
-            # C. 關鍵步驟：等待影片處理 (避免 404)
-            with st.spinner("2/3 AI 正在解析動作細節 (約需 10-20 秒)..."):
-                while video_file.state.name == "PROCESSING":
-                    time.sleep(2)
-                    video_file = genai.get_file(video_file.name)
+    # 抓取該項目的詳細指標
+    row = criteria_df[criteria_df["測驗項目"] == selected_test].iloc[0]
+    ai_context = row["AI 指令脈絡"]
+    indicators = row["具體指標"]
+    cues = row["專業指令與建議"]
+
+    st.divider()
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        st.subheader("📹 上傳測驗影片")
+        uploaded_v = st.file_uploader(f"請上傳【{selected_test}】影片", type=["mp4", "mov"])
+        if uploaded_v:
+            st.video(uploaded_v)
+
+    with col2:
+        st.subheader("🤖 AI 診斷報告")
+        if uploaded_v and st.button(f"🔍 開始執行 {selected_test} 專業分析"):
+            try:
+                # A. 處理暫存與上傳
+                temp_path = "temp_analysis.mp4"
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_v.read())
                 
-                if video_file.state.name == "FAILED":
-                    st.error("❌ 影片處理失敗，請嘗試更換影片檔。")
-                    st.stop()
-            
-            # D. 發送分析請求
-            with st.spinner("3/3 教練正在整理評語，請稍候..."):
-                model = genai.GenerativeModel(model_name=MODEL_ID)
+                with st.spinner("⏳ 正在傳送影片至 AI 伺服器..."):
+                    video_file = genai.upload_file(path=temp_path)
                 
-                # 專業體育教學 Prompt
-                prompt = """
-                你現在是一位專業的國小體育教練。請觀看這段跳繩影片並提供以下建議：
-                1. 【精準計次】：算出影片中成功跳過的次數。
-                2. 【動作分析】：針對手腕搖繩、雙腳跳躍高度、落地緩衝等動作給予評價。
-                3. 【改進建議】：給予學生一句鼓勵的話，並提供一個可以更好的訓練小撇步。
-                請完全使用「繁體中文」回覆。
-                """
+                # B. 等待處理
+                with st.spinner("⏳ AI 正在比對指標庫進行診斷..."):
+                    while video_file.state.name == "PROCESSING":
+                        time.sleep(2)
+                        video_file = genai.get_file(video_file.name)
                 
-                response = model.generate_content([video_file, prompt])
+                # C. 生成動態 Prompt 並要求分析
+                with st.spinner("📋 正在撰寫分析報告..."):
+                    model = genai.GenerativeModel(model_name=MODEL_ID)
+                    
+                    # 這裡就是把您的 Sheet 內容組合起來
+                    dynamic_prompt = f"""
+                    {ai_context}
+                    
+                    請針對以下具體指標進行深度觀察與評分：
+                    {indicators}
+                    
+                    分析完成後，請根據以下教學處方給予學生建議：
+                    {cues}
+                    
+                    請完全使用「繁體中文」並以 Markdown 格式回覆。
+                    """
+                    
+                    response = model.generate_content([video_file, dynamic_prompt])
+                    st.success("分析完成！")
+                    st.markdown(response.text)
                 
-                st.success("✅ 分析成功！")
-                st.divider()
-                st.markdown("### 🤖 AI 教練分析報告")
-                st.write(response.text)
-                
-            # E. 資源清理
-            genai.delete_file(video_file.name)
-            if os.path.exists(temp_path):
+                # D. 清理
+                genai.delete_file(video_file.name)
                 os.remove(temp_path)
-                
-        except Exception as e:
-            st.error(f"❌ 分析過程發生意外錯誤：{e}")
-            st.info("💡 小提示：如果出現權限錯誤，請確認您的 API Key 是否已啟用 Gemini 2.5 權限。")
 
+            except Exception as e:
+                st.error(f"分析過程發生錯誤：{e}")
 else:
-    st.warning("👈 請先上傳一段影片，然後點擊按鈕進行測試。")
+    st.warning("請確認 Google Sheets 中有名為 'AI_Criteria' 的分頁，且欄位名稱正確。")
 
-# --- 側邊欄狀態 ---
-st.sidebar.title("系統狀態")
-st.sidebar.write(f"當前使用模型：`{MODEL_ID}`")
-st.sidebar.write("API 連線狀態：✅ 正常")
+# --- 側邊欄：顯示目前的參考指標 ---
+if criteria_df is not None:
+    st.sidebar.title("📚 當前診斷標準")
+    st.sidebar.info(f"**項目：** {selected_test}")
+    st.sidebar.write("**AI 視角：**")
+    st.sidebar.caption(ai_context)
+    st.sidebar.write("**觀察重點：**")
+    st.sidebar.caption(indicators)
