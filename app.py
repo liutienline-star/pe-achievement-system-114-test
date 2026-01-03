@@ -13,7 +13,7 @@ st.set_page_config(page_title="114學年度體育成績 AI 管理系統", layout
 # API 安全金鑰 (使用 gemini-1.5-flash)
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    MODEL_ID = "gemini-1.5-flash" 
+    MODEL_ID = "models/gemini-2.5-flash" 
 else:
     st.error("❌ 找不到 API_KEY"); st.stop()
 
