@@ -36,18 +36,19 @@ def check_password():
 
 if not check_password(): st.stop()
 
-# --- 3. 資料連線與讀取 ---
+# --- 3. 資料連線與讀取 (修正：延長快取時間以解決 429 錯誤) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=600) # 修正：快取改為 10 分鐘，避免頻繁請求 API
 def load_full_data():
     try:
-        df_sl = conn.read(worksheet="Student_List", ttl="0s").astype(str)
-        df_s = conn.read(worksheet="Scores", ttl="0s").astype(str)
-        df_n = conn.read(worksheet="Norms_Settings", ttl="0s").astype(str)
-        df_c = conn.read(worksheet="AI_Criteria", ttl="0s").astype(str)
+        # 修正：移除內部的 ttl="0s"，讓 API 請求頻率降低
+        df_sl = conn.read(worksheet="Student_List").astype(str)
+        df_s = conn.read(worksheet="Scores").astype(str)
+        df_n = conn.read(worksheet="Norms_Settings").astype(str)
+        df_c = conn.read(worksheet="AI_Criteria").astype(str)
         try:
-            df_h = conn.read(worksheet="Analysis_Results", ttl="0s").astype(str)
+            df_h = conn.read(worksheet="Analysis_Results").astype(str)
         except:
             df_h = pd.DataFrame()
         
@@ -57,7 +58,7 @@ def load_full_data():
                 df.columns = df.columns.astype(str).str.strip()
         return df_sl, df_s, df_n, df_c, df_h
     except Exception as e:
-        st.error(f"資料讀取失敗：{e}"); st.stop()
+        st.error(f"資料讀取失敗，可能是 API 限制，請稍候一分鐘再試。詳細錯誤：{e}"); st.stop()
 
 df_student_list, df_scores, df_norms, df_criteria, df_history = load_full_data()
 
@@ -104,6 +105,12 @@ def universal_judge(category, item, gender, age, value, norms_df):
 # --- 5. 側邊欄：全域選擇器 ---
 with st.sidebar:
     st.header("🏆 系統控制面板")
+    
+    # 修正：增加手動刷新的按鈕，讓老師在修改 Sheet 後可以手動同步
+    if st.button("🔄 強制重新整理資料"):
+        st.cache_data.clear()
+        st.rerun()
+
     mode = st.radio("🎯 切換功能模式", ["一般術科與體適能", "🚀 AI 智慧技術診斷", "📊 數據報表與管理"])
     
     st.divider()
@@ -119,7 +126,6 @@ with st.sidebar:
     # 抓取學生基本資料
     stu = stu_df[stu_df['座號'] == sel_no].iloc[0]
     sel_name = stu['姓名']
-    # 性別欄位模糊匹配
     g_col = next((c for c in df_student_list.columns if "性" in c), "性別")
     sel_gender = str(stu[g_col]).strip()
     sel_age = stu.get('年齡', '0')
@@ -175,13 +181,11 @@ if mode == "一般術科與體適能":
     
     note = st.text_input("💬 備註", "")
 
-    # 歷史紀錄顯示
     st.write("🕒 **近期測驗紀錄：**")
     recent = df_scores[(df_scores['姓名'] == sel_name) & (df_scores['項目'] == test_item)]
     if not recent.empty:
         st.dataframe(recent[['紀錄時間', '成績', '等第/獎牌']].tail(3), use_container_width=True)
 
-    # 儲存邏輯
     st.divider()
     existing_mask = (df_scores['姓名'] == sel_name) & (df_scores['項目'] == test_item)
     if st.button("💾 儲存成績 (同步更新至雲端)"):
@@ -199,34 +203,30 @@ if mode == "一般術科與體適能":
             final_df = pd.concat([df_scores_clean, pd.DataFrame([new_row])], ignore_index=True)
         
         conn.update(worksheet="Scores", data=final_df)
-        st.balloons(); st.success("✅ 成績已同步更新！"); st.cache_data.clear(); st.rerun()
+        st.cache_data.clear() # 修正：存檔後清除快取，下次讀取就是新的
+        st.balloons(); st.success("✅ 成績已同步更新！"); st.rerun()
 
 # [功能二：AI 智慧技術診斷]
 elif mode == "🚀 AI 智慧技術診斷":
     st.subheader(f"🚀 {sel_name} - 動作影像 AI 綜合診斷")
-    
-    # 從 Scores 找該生已錄入的成績
     stu_scores = df_scores[df_scores['姓名'] == sel_name]
     sel_test_ai = st.selectbox("1. 選擇診斷項目", stu_scores['項目'].unique().tolist())
     
     if not sel_test_ai:
         st.warning("請先在『一般術科』模式中錄入該學生的成績數據。")
     else:
-        # 抓取對應 Criteria
         match_criteria = df_criteria[df_criteria["測驗項目"].str.strip() == sel_test_ai.strip()]
         if match_criteria.empty:
             st.error(f"❌ 在 AI_Criteria 中找不到項目：{sel_test_ai}")
         else:
             cri = match_criteria.iloc[0]
             raw_score = stu_scores[stu_scores['項目'] == sel_test_ai].iloc[-1]['成績']
-            
             col_l, col_r = st.columns([1, 1.5])
             with col_l:
                 st.metric("實測成績數據", f"{raw_score}")
                 st.info(f"📋 性別：{sel_gender}")
                 with st.expander("📈 查看參考常模"):
                     st.dataframe(df_norms[df_norms['項目名稱'] == sel_test_ai], hide_index=True)
-            
             with col_r:
                 uploaded_v = st.file_uploader("📹 上傳動作影片 (mp4/mov)", type=["mp4", "mov"])
                 if uploaded_v: st.video(uploaded_v)
@@ -241,18 +241,8 @@ elif mode == "🚀 AI 智慧技術診斷":
                             video_file = genai.upload_file(path=temp_path)
                             while video_file.state.name == "PROCESSING": time.sleep(2); video_file = genai.get_file(video_file.name)
                             
-                            # 綜合 Prompt
-                            full_prompt = f"""
-                            你是一位體育術科評分專家。
-                            學生：{sel_name} | 性別：{sel_gender} | 項目：{sel_test_ai} | 數據：{raw_score}
-                            
-                            【任務要求】
-                            1. 性別核對：若影像中人物與登記性別({sel_gender})不符，首行標註警示。
-                            2. 數據分：根據常模轉換數據。
-                            3. 技術分：依據指標「{cri.get('Indicators', '')}」給分。
-                            4. 總分計算：依據邏輯「{cri.get('Logic', '')}」計算。
-                            5. 處方：提供「{cri.get('Cues', '')}」建議。
-                            """
+                            full_prompt = f"""你是一位體育術科評分專家。學生：{sel_name} | 性別：{sel_gender} | 項目：{sel_test_ai} | 數據：{raw_score}
+                            【任務要求】1. 性別核對：若不符登記性別({sel_gender})請警示。2. 數據分：根據常模轉換。3. 技術分：指標「{cri.get('Indicators', '')}」。4. 總分：邏輯「{cri.get('Logic', '')}」。5. 處方：建議「{cri.get('Cues', '')}」。"""
                             model = genai.GenerativeModel(MODEL_ID)
                             response = model.generate_content([video_file, full_prompt])
                             st.session_state['ai_report'] = response.text
@@ -266,31 +256,23 @@ elif mode == "🚀 AI 智慧技術診斷":
                 st.subheader("👨‍🏫 老師專業校準")
                 t_note = st.text_area("給學生的補充評語")
                 t_score = st.text_input("修正最終總分 (如不修正請留空)")
-                
                 if st.button("💾 存入 Analysis_Results"):
-                    new_entry = {
-                        "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "班級": sel_class, "姓名": sel_name, "項目": sel_test_ai,
-                        "最終得分": t_score if t_score else "見AI報告",
-                        "AI診斷報告": st.session_state['ai_report'], "老師評語": t_note
-                    }
+                    new_entry = {"時間": datetime.now().strftime("%Y-%m-%d %H:%M"), "班級": sel_class, "姓名": sel_name, "項目": sel_test_ai, "最終得分": t_score if t_score else "見AI報告", "AI診斷報告": st.session_state['ai_report'], "老師評語": t_note}
                     try:
                         hist = conn.read(worksheet="Analysis_Results")
                         updated = pd.concat([hist, pd.DataFrame([new_entry])], ignore_index=True)
                     except: updated = pd.DataFrame([new_entry])
                     conn.update(worksheet="Analysis_Results", data=updated)
+                    st.cache_data.clear() # 修正：存檔成功後清除快取
                     st.success("✅ AI 分析結果已存入雲端！")
 
 # [功能三：數據報表與管理]
 elif mode == "📊 數據報表與管理":
     tab1, tab2, tab3 = st.tabs(["👤 個人成績單", "👥 班級總覽", "⚙️ 系統管理"])
-    
     with tab1:
         p_data = df_scores[df_scores['姓名'] == sel_name].copy()
-        if not p_data.empty:
-            st.dataframe(p_data, use_container_width=True)
+        if not p_data.empty: st.dataframe(p_data, use_container_width=True)
         else: st.info("尚無個人紀錄")
-        
     with tab2:
         cl_data = df_scores[df_scores['班級'] == sel_class].copy()
         if not cl_data.empty:
@@ -298,14 +280,13 @@ elif mode == "📊 數據報表與管理":
             csv = cl_data.to_csv(index=False).encode('utf-8-sig')
             st.download_button("📥 下載班級報表", csv, f"{sel_class}_report.csv")
         else: st.info("該班尚無紀錄")
-        
     with tab3:
         st.subheader("📝 常模即時編輯")
         edited_norms = st.data_editor(df_norms, num_rows="dynamic", use_container_width=True)
         if st.button("💾 同步更新常模"):
             conn.update(worksheet="Norms_Settings", data=edited_norms)
+            st.cache_data.clear()
             st.success("常模已更新！"); st.rerun()
-        
         st.divider()
         st.subheader("🛠️ 全校重新判定工具")
         if st.button("🚀 依照新常模重算全校分數"):
@@ -317,4 +298,5 @@ elif mode == "📊 數據報表與管理":
                         cat = "體適能" if row['測驗類別'] == "體適能" else "一般術科"
                         df_scores.at[idx, '等第/獎牌'] = universal_judge(cat, row['項目'], s['性別'], s['年齡'], row['成績'], df_norms)
                 conn.update(worksheet="Scores", data=df_scores.map(clean_numeric_string))
+                st.cache_data.clear()
                 st.success("全校成績重算完成！"); st.rerun()
