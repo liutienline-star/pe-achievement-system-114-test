@@ -6,20 +6,19 @@ import time
 import pandas as pd
 
 # --- 1. 頁面初始設定 ---
-st.set_page_config(page_title="114學年術科 AI 綜評診斷系統", layout="wide", page_icon="🏅")
+st.set_page_config(page_title="114學年術科 AI 權重評分系統", layout="wide", page_icon="🏅")
 st.title("🏅 術科 AI 專業評分診斷系統")
-st.markdown("##### 結合【現場實測數據】與【AI 影像動作分析】的深度教學工具")
+st.markdown("##### 整合【數據落點】與【影像技術】自動加權計分")
 
 # API 安全金鑰初始化
 if "GOOGLE_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
-    # 使用您清單中確認可用的 2.5 Flash 穩定版
     MODEL_ID = "models/gemini-2.5-flash" 
 else:
     st.error("❌ 找不到 GOOGLE_API_KEY，請在 Streamlit Secrets 中設定。")
     st.stop()
 
-# --- 2. 資料庫連線 (Google Sheets) ---
+# --- 2. 資料庫連線 ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 @st.cache_data(ttl=10)
@@ -28,12 +27,11 @@ def load_all_sheets():
         df_c = conn.read(worksheet="AI_Criteria")
         df_n = conn.read(worksheet="Norms_Settings")
         df_s = conn.read(worksheet="Scores")
-        # 清理欄位空格
         for df in [df_c, df_n, df_s]:
             df.columns = df.columns.str.strip()
         return df_c, df_n, df_s
     except Exception as e:
-        st.error(f"⚠️ 資料讀取失敗，請確認分頁名稱：{e}")
+        st.error(f"⚠️ 資料讀取失敗：{e}")
         return None, None, None
 
 df_criteria, df_norms, df_scores = load_all_sheets()
@@ -43,32 +41,29 @@ if df_scores is not None and df_criteria is not None:
     # A. 側邊欄：學生與項目選擇
     with st.sidebar:
         st.header("👤 待診斷名單")
-        
-        # 班級處理 (轉換為字串避免 .0 問題)
         df_scores["班級"] = df_scores["班級"].astype(str).str.replace(".0", "", regex=False)
         all_classes = sorted(df_scores["班級"].unique().tolist())
         sel_class = st.selectbox("1. 選擇班級", all_classes)
         
-        # 學生處理
         class_students = df_scores[df_scores["班級"] == sel_class]
         all_names = class_students["姓名"].unique().tolist()
         sel_name = st.selectbox("2. 選擇學生", all_names)
         
-        # 項目處理
         student_data = class_students[class_students["姓名"] == sel_name]
         available_tests = student_data["項目"].unique().tolist()
         sel_test = st.selectbox("3. 選擇測驗項目", available_tests)
         
-        # 抓取實測成績數據
+        # 抓取該生該項目的實測數據與性別
         current_record = student_data[student_data["項目"] == sel_test].iloc[0]
         raw_score_val = current_record["成績"]
+        sel_gender = current_record["性別"] if "性別" in current_record else "未註記"
 
         st.divider()
         if st.button("🔄 重新整理資料庫"):
             st.cache_data.clear()
             st.rerun()
 
-    # B. 跨表提取指標與常模 (含模糊匹配邏輯)
+    # B. 跨表提取指標與權重邏輯
     try:
         target_test = sel_test.strip()
         match_row = df_criteria[df_criteria["測驗項目"].str.strip() == target_test]
@@ -79,21 +74,19 @@ if df_scores is not None and df_criteria is not None:
             
         row_c = match_row.iloc[0]
         
-        # 模糊搜尋欄位 (容許 E. 等標題前綴)
         def find_col_val(keyword):
             for col in df_criteria.columns:
                 if keyword in col: return row_c[col]
             return None
 
         unit = find_col_val("Data_Unit")
-        logic = find_col_val("Scoring_Logic")
+        logic = find_col_val("Scoring_Logic") # 權重比例來源
         context = find_col_val("AI_Context")
         indicators = find_col_val("Indicators")
         cues = find_col_val("Cues")
 
-        # 檢查必填欄位
         if any(v is None for v in [unit, logic, context]):
-            st.error("❌ AI_Criteria 標題格式不符，請確保包含 (Data_Unit), (Scoring_Logic) 等英文關鍵字。")
+            st.error("❌ AI_Criteria 欄位標題不符，請檢查包含 Data_Unit, Scoring_Logic 等文字。")
             st.stop()
             
         relevant_norms = df_norms[df_norms["項目名稱"].str.strip() == target_test]
@@ -105,80 +98,84 @@ if df_scores is not None and df_criteria is not None:
     col_info, col_video = st.columns([1, 1.5])
     
     with col_info:
-        st.subheader("📊 實測成績摘要")
-        st.info(f"**學生**：{sel_name} ({sel_class}班)")
+        st.subheader("📊 實測成績與性別")
+        st.info(f"**學生**：{sel_name} ({sel_gender} / {sel_class}班)")
         st.metric(label=f"現場實測 ({unit})", value=f"{raw_score_val} {unit}")
         
-        with st.expander("📈 檢視參考常模"):
+        with st.expander("📈 參考常模標準"):
             st.dataframe(relevant_norms, hide_index=True)
             
-        with st.expander("📝 診斷依據指標"):
-            st.write(indicators)
+        with st.expander("⚖️ 評分權重分配"):
+            st.write(logic)
 
     with col_video:
         st.subheader("📹 上傳診斷片段")
-        uploaded_v = st.file_uploader("選擇影片 (MP4/MOV)", type=["mp4", "mov"])
+        uploaded_v = st.file_uploader("上傳影片 (MP4/MOV)", type=["mp4", "mov"])
         if uploaded_v:
             st.video(uploaded_v)
 
-    # D. 啟動【數據+技術】結合診斷分析
-    if st.button(f"🚀 開始【{sel_test}】綜評診斷"):
+    # D. 啟動【加權綜評】診斷分析
+    if st.button(f"🚀 開始【{sel_test}】加權綜評診斷"):
         if not uploaded_v:
             st.warning("請先上傳影片。")
         else:
-            with st.spinner("⏳ AI 正在將數據與動作進行聯網診斷..."):
+            with st.spinner("⏳ AI 正在計算技術得分並進行性別核對..."):
                 try:
-                    # 儲存暫存檔
                     temp_path = "temp_diag.mp4"
                     with open(temp_path, "wb") as f:
                         f.write(uploaded_v.read())
                     
-                    # 上傳至 Gemini
                     video_file = genai.upload_file(path=temp_path)
                     while video_file.state.name == "PROCESSING":
                         time.sleep(2)
                         video_file = genai.get_file(video_file.name)
                     
-                    # 準備常模資料
                     norms_text = relevant_norms.to_string(index=False)
                     
-                    # 核心 Prompt：數據與技術結合
+                    # 核心 Prompt：鎖定性別並計算加權總分
                     full_prompt = f"""
-                    你是一位專業的術科教學專家，擅長結合「定量成績」與「定性動作」進行對照分析。
-                    目前診斷項目：【{sel_test}】
+                    你是一位專業的術科教學與體育評分專家。
+                    
+                    【受測者基本資料】
+                    - 姓名：{sel_name}
+                    - 性別：{sel_gender} (請務必依照此性別進行常模比對與技術建議)
+                    - 測驗項目：{sel_test}
+                    - 實測數據：{raw_score_val} {unit}
 
-                    【第一步：內容核對】
-                    請判斷影片動作是否為「{sel_test}」。若不符，請直接回覆「⚠️ 項目偵測錯誤」並停止分析。
+                    【第一步：身份核對】
+                    1. 檢查影片中人物的性別是否與資料庫紀錄的【{sel_gender}】相符？若不符，請在報告首行發出警示。
+                    2. 確認動作是否為 {sel_test}。
 
-                    【第二步：數據落點診斷 (定量)】
-                    1. 學生實測成績：{raw_score_val} {unit}。
-                    2. 參考常模對照：\n{norms_text}\n
-                    請分析此成績在常模中的落點與水準。
+                    【第二步：數據分計算 (Data Score)】
+                    請參考常模：\n{norms_text}\n
+                    根據實測數據 {raw_score_val}，將其轉換為 0-100 分的「數據分」。
 
-                    【第三步：動作技術診斷 (定性)】
-                    根據以下指標分析影片中的關鍵動作缺失：
-                    {indicators}
+                    【第三步：技術分計算 (Technical Score)】
+                    根據以下技術指標分析影像中的動作：\n{indicators}\n
+                    請給出一個 0-100 分的「技術分」。
 
-                    【第四步：綜評診斷 (核心結合)】
-                    這是最重要的部分！請將「數據」與「技術」掛鉤：
-                    - 分析為什麼學生的技術動作導致了目前的實測數據？(例如：因為揮臂力量不足導致球速慢、數據不佳)。
-                    - 診斷動作是否有效率，有無受傷風險。
+                    【第四步：最終總體評分 (Total Score)】
+                    請參考您的評分權重邏輯：【{logic}】
+                    計算公式：(數據分 × 數據權重) + (技術分 × 技術權重) = 最終得分。
 
                     【第五步：產出報告結構】
-                    1. 🏆 綜合評等：(給予 數據/技術 的加權總結，1-5顆星)
-                    2. 📊 數據診斷：(成績落點與表現分析)
-                    3. 🎥 技術診斷：(影片動作關鍵缺失，嚴謹且不美化)
-                    4. 💡 突破處方：(根據 {cues} 提供建議。為了提升「數據成績」，「技術動作」具體要改哪裡？)
+                    1. 🏆 評分總結：
+                       - 數據分：[得分]/100
+                       - 技術分：[得分]/100
+                       - **最終加權得分：[總分]**
+                    2. 👤 身份確認：(性別一致性說明)
+                    3. 📊 數據診斷：(說明成績在常模中的位置)
+                    4. 🎥 技術診斷：(說明影片中為何拿到此技術分，缺失為何)
+                    5. 💡 突破處方：(結合 {cues}，為了提高最終得分，應如何優化動作)
                     """
                     
                     model = genai.GenerativeModel(MODEL_ID)
                     response = model.generate_content([video_file, full_prompt])
                     
                     st.divider()
-                    st.subheader(f"📋 {sel_name} － {sel_test} 綜評診斷報告")
+                    st.subheader(f"📋 {sel_name} － {sel_test} 加權診斷報告")
                     st.markdown(response.text)
                     
-                    # 清理
                     genai.delete_file(video_file.name)
                     os.remove(temp_path)
                 except Exception as e:
