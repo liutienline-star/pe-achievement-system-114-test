@@ -172,60 +172,83 @@ with st.sidebar:
 # --- 5. 主介面分頁 ---
 tab_entry, tab_ai, tab_manage = st.tabs(["📝 成績錄入", "🚀 AI 智慧診斷", "📊 數據報表與管理"])
 
-# [分頁 1：成績錄入]
+# [分頁 1：成績錄入 - 修正覆蓋與連動邏輯]
 with tab_entry:
     col1, col2 = st.columns(2)
     with col1:
-        test_cat = st.selectbox("🗂️ 類別", ["一般術科", "體適能", "球類", "田徑"])
+        # 1. 類別連動項目 (確保類別選擇會即時影響項目清單)
+        test_cat = st.selectbox("🗂️ 類別", ["一般術科", "體適能", "球類", "田徑"], key="entry_cat")
         items = df_norms[df_norms["測驗類別"] == test_cat]["項目名稱"].unique().tolist()
-        sel_item = st.selectbox("📝 項目", items + ["其他"])
-        if sel_item == "其他": sel_item = st.text_input("✍️ 輸入項目名稱")
+        sel_item = st.selectbox("📝 項目", items + ["其他"], key="entry_item")
+        if sel_item == "其他": 
+            sel_item = st.text_input("✍️ 輸入項目名稱")
+
     with col2:
-        fmt = st.selectbox("📏 格式", ["純數字 (次數/分數)", "秒數 (分:秒)", "秒數 (00.00)"])
+        fmt = st.selectbox("📏 格式", ["純數字 (次數/分數)", "秒數 (分:秒)", "秒數 (00.00)"], key="entry_fmt")
         if "分:秒" in fmt:
             c1, c2 = st.columns(2)
-            final_val = f"{c1.number_input('分',0,20,8):02d}:{c2.number_input('秒',0,59,0):02d}.0"
+            final_val = f"{c1.number_input('分', 0, 20, 8):02d}:{c2.number_input('秒', 0, 59, 0):02d}.0"
         elif "00.00" in fmt:
             c1, c2 = st.columns(2)
-            final_val = f"{c1.number_input('秒',0,99,13)}.{c2.number_input('毫秒',0,99,0):02d}"
-        else: final_val = st.text_input("📊 輸入數值", "0")
+            final_val = f"{c1.number_input('秒', 0, 99, 13)}.{c2.number_input('毫秒', 0, 99, 0):02d}"
+        else: 
+            final_val = st.text_input("📊 輸入數值", "0")
 
-    # 計算常模分數
+    # 2. 自動參照體適能常模 (這部分會依據性別、年齡自動轉換)
+    # 確保 universal_judge 內部有處理「仰臥捲腹」等體適能邏輯
     res_medal, res_score = universal_judge(sel_item, curr_stu['性別'], curr_stu['年齡'], final_val, df_norms)
     
-    # 修正點：錄入分頁應存入 Scores 表
-    if st.button("💾 儲存成績 (存入 Scores)", use_container_width=True):
-        new_score = {
-            "紀錄時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "班級": sel_class, "姓名": sel_name, "項目": sel_item,
-            "成績": final_val, "等第/獎牌": str(res_score), "備註": res_medal
-        }
-        old_scores = conn.read(worksheet="Scores").astype(str)
-        updated_scores = pd.concat([old_scores, pd.DataFrame([new_score])], ignore_index=True)
-        conn.update(worksheet="Scores", data=updated_scores)
-        st.success(f"✅ {sel_name} 的數據成績 {res_score} 分已存入！")
+    st.info(f"💡 系統自動換算：**{res_score} 分** ({res_medal})")
 
-    # --- [在 tab_entry 分頁中顯示近期紀錄的部分] ---
-st.divider()
-st.write(f"🕒 **{sel_name} - {sel_item} 近期紀錄：**")
+    # 3. 儲存與覆蓋邏輯
+    if st.button("💾 儲存/更新成績 (覆蓋現有紀錄)", use_container_width=True):
+        try:
+            new_score = {
+                "紀錄時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "班級": str(sel_class), 
+                "姓名": str(sel_name), 
+                "項目": str(sel_item),
+                "成績": str(final_val), 
+                "等第/獎牌": str(res_score), 
+                "備註": str(res_medal)
+            }
+            
+            # 讀取現有成績單
+            old_scores = conn.read(worksheet="Scores").astype(str)
+            
+            # 【關鍵修正：覆蓋邏輯】
+            # 先合併新資料，然後根據「姓名」與「項目」進行去重，保留最後一筆（即剛輸入的這一筆）
+            updated_scores = pd.concat([old_scores, pd.DataFrame([new_score])], ignore_index=True)
+            updated_scores = updated_scores.drop_duplicates(subset=["姓名", "項目"], keep="last")
+            
+            conn.update(worksheet="Scores", data=updated_scores)
+            
+            # 【關鍵修正：強制快取更新】
+            st.cache_data.clear() # 清除讀取快取，確保下方「近期紀錄」立即顯示最新結果
+            st.success(f"✅ {sel_name} 的『{sel_item}』成績已更新為 {res_score} 分！")
+            st.rerun() # 重新啟動以刷新下方表格
+            
+        except Exception as e:
+            st.error(f"儲存失敗：{e}")
 
-# 關鍵修正：使用 .str.strip() 確保比對時不會被空格干擾
-# 並且確保 sel_name 與 sel_item 是從當前 Widgets 取得的最值
-recent = df_scores[
-    (df_scores['姓名'].astype(str).str.strip() == str(sel_name).strip()) & 
-    (df_scores['項目'].astype(str).str.strip() == str(sel_item).strip())
-].copy()
+    # --- 4. 顯示近期紀錄 (緊跟在儲存按鈕下方) ---
+    st.divider()
+    st.markdown(f"### 🕒 **{sel_name}** - **{sel_item}** 歷史紀錄")
 
-if not recent.empty:
-    # 排序：確保最近的在下面 (或上面，依老師習慣)
-    # 假設有 '紀錄時間' 欄位，我們顯示最近 5 筆
-    display_df = recent[['紀錄時間', '成績', '等第/獎牌']].tail(5)
-    display_df.columns = ['紀錄時間', '原始紀錄(成績)', '數據分數(常模分數)']
-    
-    # 加上 use_container_width=True 讓表格滿版
-    st.dataframe(display_df, use_container_width=True)
-else:
-    st.caption(f"✨ 目前尚無 {sel_name} 在「{sel_item}」項目的歷史紀錄")
+    # 再次從連線讀取最新的 df_scores
+    latest_scores = conn.read(worksheet="Scores").astype(str)
+    recent = latest_scores[
+        (latest_scores['姓名'].str.strip() == str(sel_name).strip()) & 
+        (latest_scores['項目'].str.strip() == str(sel_item).strip())
+    ].copy()
+
+    if not recent.empty:
+        # 只取最近 5 筆，且將最後一筆（剛存入的）標註出來
+        display_df = recent[['紀錄時間', '成績', '等第/獎牌', '備註']].tail(5)
+        display_df.columns = ['錄入時間', '數值', '得分', '常模等第']
+        st.dataframe(display_df, use_container_width=True)
+    else:
+        st.caption(f"✨ 該生目前在「{sel_item}」項目尚無儲存紀錄。")
 
     # [分頁 2：AI 智慧診斷 - 最終完整不變動版]
 with tab_ai:
