@@ -189,9 +189,9 @@ with tab_entry:
             st.rerun()
         except Exception as e:
             st.error(f"存檔發生錯誤：{e}")
-# [分頁 2：AI 智慧診斷 - 100% 完整還原強化版]
+# [分頁 2：AI 智慧診斷 - 最終完整還原強化版]
 with tab_ai:
-    # 1. 讀取學生成績 (確保分頁 1 已存檔)
+    # 1. 讀取學生成績
     score_row = df_scores[(df_scores["姓名"] == sel_name) & (df_scores["項目"] == sel_item)]
     
     if score_row.empty:
@@ -203,18 +203,16 @@ with tab_ai:
         if curr_stu['性別'] not in available_genders:
             st.warning(f"💡 偵測：常模表中僅包含【{', '.join(available_genders)}】的標準，當前學生為【{curr_stu['性別']}】，分數判定僅供參考。")
 
-        # 取得最新成績並進行常模判定 (背景運算)
+        # 取得最新成績與常模判定 (data_score 為查表後的常模分數，如 69 分)
         current_val = score_row.iloc[-1]["成績"]
         data_medal, data_score = universal_judge(sel_item, curr_stu['性別'], curr_stu['年齡'], current_val, df_norms)
         
-        # 2. 抓取 AI_Criteria 完整指標 (自動對接 Sheet 欄位)
+        # 2. 抓取 AI_Criteria 完整指標
         c_rows = df_criteria[df_criteria["測驗項目"] == sel_item]
         if c_rows.empty: 
             st.error(f"❌ AI_Criteria 找不到此項目指標：{sel_item}"); st.stop()
-        
         c_row = c_rows.iloc[0]
 
-        # 動態欄位搜尋函式
         def get_col(keywords):
             return next((c for c in c_row.index if any(k in str(c) for k in keywords)), None)
 
@@ -224,38 +222,32 @@ with tab_ai:
         col_logic = get_col(["評分權重", "Scoring_Logic"])
         col_unit = get_col(["數據單位", "Data_Unit"])
 
-        # 解析權重比例 (例如 70%/30%)
-        logic_str = str(c_row[col_logic]) if col_logic else "50/50"
+        logic_str = str(c_row[col_logic]) if col_logic else "70/30"
         w_data, w_tech = parse_logic_weights(logic_str)
         unit_str = str(c_row[col_unit]) if col_unit else ""
 
-        # 3. 介面呈現 (左右並排)
+        # 3. 介面呈現
         col_i, col_v = st.columns([1, 1.2])
-        
         with col_i:
             st.subheader("📊 診斷參考數據")
-            # 依老師要求：僅呈現數據分數，隱藏等第
-            st.metric("數據得分 (背景判定)", f"{data_score} 分") 
-            st.write(f"📝 **測驗紀錄：** {current_val} {unit_str}")
-            st.write(f"⚙️ **加權邏輯：** {logic_str}")
-            st.write(f"📊 **權重比例：** 數據 {int(w_data*100)}% / 技術 {int(w_tech*100)}%")
+            st.metric("數據得分 (常模轉換)", f"{data_score} 分") 
+            st.write(f"📝 **測驗紀錄：** {current_val} {unit_str}") # 保留原始紀錄呈現
+            st.write(f"⚙️ **加權比例：** 數據 {int(w_data*100)}% / 技術 {int(w_tech*100)}%")
             if col_indicators:
                 st.info(f"💡 **技術指標：**\n{c_row[col_indicators]}")
             
         with col_v:
             st.subheader("📹 動作影像上傳")
-            up_v = st.file_uploader("選擇影片檔案 (MP4, MOV)", type=["mp4", "mov"])
+            up_v = st.file_uploader("選擇影片檔案", type=["mp4", "mov"])
             if up_v: st.video(up_v)
 
-        # 4. AI 分析執行 (參照 AI_Criteria)
+        # 4. AI 分析執行
         st.divider()
         if st.button("🚀 開始執行 AI 綜合診斷"):
-            if not up_v:
-                st.warning("⚠️ 請先上傳動作影片。")
+            if not up_v: st.warning("⚠️ 請上傳影片。")
             else:
-                with st.spinner("AI 正在參照指標分析影片中..."):
+                with st.spinner("AI 正在分析動作優缺點與技術分..."):
                     try:
-                        # 影片處理
                         temp_path = "temp_analysis.mp4"
                         with open(temp_path, "wb") as f: f.write(up_v.read())
                         video_file = genai.upload_file(path=temp_path)
@@ -263,50 +255,54 @@ with tab_ai:
                             time.sleep(2)
                             video_file = genai.get_file(video_file.name)
                         
-                        # 構建 Prompt：將所有 Sheet 指令注入
+                        # Prompt 強化：要求 AI 必須以特定格式結尾
                         full_prompt = f"""
                         角色設定：{c_row[col_context] if col_context else '專業體育老師'}
-                        學生項目：{sel_item}
+                        任務：
+                        1.【優缺點分析】：針對影片中動作的優勢與技術缺點進行點評。
+                        2.【技術指標分析】：參照「{c_row[col_indicators]}」。
+                        3.【教學建議】：給予「{c_row[col_cues]}」。
                         
-                        請根據影片內容進行診斷：
-                        1. 觀察重點（具體指標）：{c_row[col_indicators] if col_indicators else '標準動作要領'}
-                        2. 診斷處方參考：{c_row[col_cues] if col_cues else '提供動作修正之教學建議'}
-                        
-                        請給予 0-100 的『技術分』，並撰寫診斷報告。
-                        報告結尾請標註：【教學處方】。
+                        請在報告結尾務必以「技術分：XX分」的格式給予 0-100 的技術評分。
                         """
-                        
                         model = genai.GenerativeModel(MODEL_ID)
                         response = model.generate_content([video_file, full_prompt])
                         
-                        # 嘗試解析 AI 建議的技術分數
-                        score_match = re.search(r"(\d+)分", response.text)
+                        # --- [核心修正：精準解析技術分] ---
+                        # 搜尋「技術分：85分」或「85分」
+                        score_match = re.search(r"技術分：(\d+)分", response.text)
+                        if not score_match:
+                            score_match = re.search(r"(\d+)分", response.text)
+                        
                         st.session_state['ai_tech_score'] = int(score_match.group(1)) if score_match else 80
                         st.session_state['ai_report'] = response.text
                         st.session_state['ai_done'] = True
                         
-                        # 清理
                         genai.delete_file(video_file.name)
                         if os.path.exists(temp_path): os.remove(temp_path)
-                        
                     except Exception as e:
                         st.error(f"AI 分析失敗：{e}")
 
-        # 5. 老師人工校準區 (加權總分計算看板)
+        # 5. 老師人工校準區 (技術分自動連動)
         if st.session_state.get('ai_done'):
             st.markdown("---")
-            st.markdown("### 📝 AI 診斷報告")
+            st.markdown("### 📝 AI 綜合診斷報告 (含優缺點)")
             st.info(st.session_state['ai_report'])
             
             st.divider()
             st.subheader("👨‍🏫 老師人工校準與評分核定")
             
-            # 技術分輸入 (老師可微調 AI 給的分數)
+            # --- [核心同步：這裡會自動顯示 AI 報告中的技術分] ---
             suggested_tech = st.session_state.get('ai_tech_score', 80)
-            tech_input = st.number_input(f"🧠 調整技術表現評分 (權重 {int(w_tech*100)}%)", 0, 100, int(suggested_tech))
+            
+            tech_input = st.number_input(
+                f"🧠 調整技術表現評分 (權重 {int(w_tech*100)}%)", 
+                0, 100, 
+                value=int(suggested_tech),  # 這裡直接連動解析出的數值
+                key="tech_input_auto"
+            )
 
-            # --- [核心：即時加權計算看板] ---
-            # 計算公式： $Total = (Data \times W_{data}) + (Tech \times W_{tech})$
+            # --- 加權計算看板 (隨 tech_input 即時更新) ---
             w_data_val = data_score * w_data
             w_tech_val = tech_input * w_tech
             total_suggested = w_data_val + w_tech_val
@@ -314,42 +310,33 @@ with tab_ai:
             st.markdown("#### 💡 即時加權計算明細")
             m1, m2, m3 = st.columns(3)
             with m1:
-                st.metric("數據加權分", f"{w_data_val:.1f}", f"原始:{data_score}")
+                st.metric("數據加權分", f"{w_data_val:.1f}", f"常模基數:{data_score}")
             with m2:
-                st.metric("技術加權分", f"{w_tech_val:.1f}", f"原始:{tech_input}")
+                st.metric("技術加權分", f"{w_tech_val:.1f}", f"調整後評分:{tech_input}")
             with m3:
-                # 老師要的依照比例後的加總分數
-                st.metric("✅ 建議總分", f"{total_suggested:.1f}", delta="最終權重加總", delta_color="normal")
+                # 最終比例後的加總分數
+                st.metric("✅ 建議總分", f"{total_suggested:.1f}", delta="加權結果")
 
             st.divider()
             col_rev, col_note = st.columns([1, 2])
             with col_rev:
-                # 老師可手動微調最終存入數值
+                # 最終存入的分數
                 final_revised = st.text_input("🔢 最終核定分數", value=f"{total_suggested:.1f}")
             with col_note:
-                t_note = st.text_area("💬 老師補充評語", placeholder="輸入教學建議，此處將同步存入試算表...")
+                t_note = st.text_area("💬 老師補充評語")
             
             if st.button("💾 確認校準並存入 Analysis_Results", use_container_width=True):
                 try:
                     new_h = {
                         "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "班級": sel_class, "姓名": sel_name, "項目": sel_item,
-                        "數據分數": data_score, 
-                        "技術分數": tech_input, 
-                        "最終修訂分數": final_revised, 
-                        "AI診斷報告": st.session_state['ai_report'], 
-                        "老師評語": t_note
+                        "數據分數": data_score, "技術分數": tech_input, 
+                        "最終修訂分數": final_revised, "AI診斷報告": st.session_state['ai_report'], "老師評語": t_note
                     }
-                    
-                    # 讀取現有紀錄並合併
-                    try:
-                        old_h = conn.read(worksheet="Analysis_Results").astype(str)
-                        updated_h = pd.concat([old_h, pd.DataFrame([new_h])], ignore_index=True)
-                    except:
-                        updated_h = pd.DataFrame([new_h])
-                        
+                    old_h = conn.read(worksheet="Analysis_Results").astype(str)
+                    updated_h = pd.concat([old_h, pd.DataFrame([new_h])], ignore_index=True)
                     conn.update(worksheet="Analysis_Results", data=updated_h)
-                    st.success(f"✅ {sel_name} 的診斷與校準紀錄已成功存檔！")
+                    st.success(f"✅ {sel_name} 的紀錄已成功存檔！")
                     st.balloons()
                 except Exception as e:
                     st.error(f"存檔失敗：{e}")
