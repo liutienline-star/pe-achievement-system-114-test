@@ -282,6 +282,7 @@ with tab_ai:
             st.error(f"❌ AI_Criteria 表中找不到項目：{sel_item}"); st.stop()
         
         c_row = c_rows.iloc[0]
+        # 預設數據 70%，技術 30%
         logic_str = str(c_row.get("評分權重 (Scoring_Logic)", "數據(70%), 技術(30%)"))
         w_data, w_tech = parse_logic_weights(logic_str)
         
@@ -290,15 +291,12 @@ with tab_ai:
         ai_cues    = str(c_row.get("專業指令與建議 (Cues)", ""))
         unit_str   = str(c_row.get("數據單位 (Data_Unit)", ""))
 
-        # 取得學生性別用於偵錯 (假設 sidebar 已抓取 curr_stu)
-        stu_gender = curr_stu.get("性別", "未知")
-
         # --- 介面呈現 ---
         col_i, col_v = st.columns([1, 1.2])
         with col_i:
             st.subheader("📊 診斷參考數據")
-            # 顯示性別與項目基本核對
-            st.info(f"👤 學生資料：{sel_name} ({stu_gender}性)")
+            # 顯示學生基本核對
+            st.info(f"👤 學生資料：{sel_name} | 項目：{sel_item}")
             
             # 顯眼呈現常模分數 (69分)
             st.metric("數據得分 (常模轉換)", f"{data_score} 分") 
@@ -315,12 +313,12 @@ with tab_ai:
             up_v = st.file_uploader("上傳診斷影片", type=["mp4", "mov"])
             if up_v: st.video(up_v)
 
-        # --- AI 分析執行 (具備性別、項目偵錯與高信度設定) ---
+        # --- AI 分析執行 (具備項目偵錯與高信度設定) ---
         st.divider()
         if st.button("🚀 開始執行 AI 綜合診斷", use_container_width=True):
             if not up_v: st.warning("⚠️ 請上傳影片後再執行。")
             else:
-                with st.spinner("AI 正在核對身分並分析動作技術..."):
+                with st.spinner("AI 正在核對項目並分析動作技術..."):
                     try:
                         temp_path = "temp_analysis.mp4"
                         with open(temp_path, "wb") as f: f.write(up_v.read())
@@ -328,28 +326,26 @@ with tab_ai:
                         while video_file.state.name == "PROCESSING":
                             time.sleep(2); video_file = genai.get_file(video_file.name)
                         
-                        # 嚴謹的 Prompt 設計
+                        # 嚴謹的 Prompt 設計 (已刪除性別偵錯)
                         full_prompt = f"""
                         角色設定：{ai_context}
-                        測驗學生性別：{stu_gender}
                         預期測驗項目：{sel_item}
 
-                        [第一步：嚴格偵錯]
-                        1. 項目核對：如果影片動作明顯不是「{sel_item}」(例如排球測驗卻上傳跳繩)，請回傳「🛑 項目偵錯錯誤：影片內容與測驗項目不符」。
-                        2. 性別核對：如果影片中人物性別明顯與「{stu_gender}性」不符，請回傳「🛑 性別偵錯錯誤：影片人物與學生資料不符」。
+                        [第一步：項目偵錯]
+                        - 項目核對：如果影片動作明顯不是「{sel_item}」(例如排球測驗卻上傳跳繩)，請回傳「🛑 項目偵錯錯誤：影片內容與測驗項目不符」。
 
                         [第二步：專業診斷]
-                        若以上核對無誤，請根據指標「{indicators}」與建議「{ai_cues}」具體列出：
+                        若項目核對無誤，請根據指標「{indicators}」與建議「{ai_cues}」具體列出：
                         1. 優點分析：
                         2. 缺點分析：
                         3. 具體改善建議：
 
                         [第三步：評分]
-                        請給予具有信效度的「技術分」(0-100)。
+                        請給予具有信效度的「技術分」(0-100)，針對相同動作應給予一致分數。
                         請務必在結尾回傳格式：技術分：XX分。
                         """
                         
-                        # 設定 Temperature=0 確保針對相同影片產出一致的分數(信度)
+                        # 設定 Temperature=0 確保分析一致性(信度)
                         model = genai.GenerativeModel(
                             MODEL_ID, 
                             generation_config={"temperature": 0}
@@ -381,7 +377,7 @@ with tab_ai:
             ai_suggested = st.session_state.get('ai_tech_score', 80)
             tech_input = st.number_input(f"核定技術評分 (佔比 {int(w_tech*100)}%)", 0, 100, value=int(ai_suggested))
 
-            # --- [精確加權計算] ---
+            # --- [精確加權計算：數據 70% + 技術 30%] ---
             actual_data_w = data_score * w_data
             actual_tech_w = tech_input * w_tech
             total_sum = actual_data_w + actual_tech_w
@@ -399,9 +395,9 @@ with tab_ai:
                         "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
                         "班級": sel_class, "姓名": sel_name, "項目": sel_item,
                         "數據分數": data_score, "技術分數": tech_input, 
-                        "最終修訂分數": total_sum, 
+                        "最終修訂分數": round(total_sum, 2), 
                         "AI診斷報告": st.session_state['ai_report'], 
-                        "老師評語": "" # 可根據需求加入 text_area
+                        "老師評語": "" 
                     }
                     old_h = conn.read(worksheet="Analysis_Results").astype(str)
                     updated_h = pd.concat([old_h, pd.DataFrame([new_h])], ignore_index=True)
