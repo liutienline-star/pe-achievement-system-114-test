@@ -389,7 +389,7 @@ with tab_ai:
             ai_suggested = st.session_state.get('ai_tech_score', 80)
             tech_input = st.number_input(f"核定技術評分 (佔比 {int(w_tech*100)}%)", 0, 100, value=int(ai_suggested))
 
-            # --- [精確加權計算：數據 70% + 技術 30%] ---
+            # --- [精確加權計算] ---
             actual_data_w = data_score * w_data
             actual_tech_w = tech_input * w_tech
             total_sum = actual_data_w + actual_tech_w
@@ -398,23 +398,37 @@ with tab_ai:
             m1, m2, m3 = st.columns(3)
             with m1: st.metric("數據加權項", f"{actual_data_w:.1f}", f"權重 {int(w_data*100)}%")
             with m2: st.metric("技術加權項", f"{actual_tech_w:.1f}", f"權重 {int(w_tech*100)}%")
-            with m3: st.metric("✅ 最終建議總分", f"{total_sum:.1f}", delta="加權結果")
+            with m3: st.metric("✅ 最終建議總分", f"{total_sum:.1f}")
 
-            # 存檔按鈕
+            # --- [防重複存檔邏輯] ---
             if st.button("💾 確認存入 Analysis_Results", use_container_width=True):
                 try:
-                    new_h = {
+                    # 1. 準備資料
+                    new_entry = {
                         "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "班級": sel_class, "姓名": sel_name, "項目": sel_item,
-                        "數據分數": data_score, "技術分數": tech_input, 
+                        "班級": sel_class, 
+                        "姓名": sel_name, 
+                        "項目": sel_item,
+                        "數據分數": data_score, 
+                        "技術分數": tech_input, 
                         "最終修訂分數": round(total_sum, 2), 
                         "AI診斷報告": st.session_state['ai_report'], 
                         "老師評語": "" 
                     }
-                    old_h = conn.read(worksheet="Analysis_Results").astype(str)
-                    updated_h = pd.concat([old_h, pd.DataFrame([new_h])], ignore_index=True)
-                    conn.update(worksheet="Analysis_Results", data=updated_h)
-                    st.success(f"✅ {sel_name} 的專業診斷紀錄已存檔！")
+                    new_df = pd.DataFrame([new_entry]).astype(str)
+
+                    # 2. 讀取並去重
+                    old_df = conn.read(worksheet="Analysis_Results")
+                    old_df = old_df.astype(str)
+                    
+                    # 合併後保留最後一筆（最新診斷）
+                    updated_df = pd.concat([old_df, new_df], ignore_index=True).drop_duplicates(
+                        subset=["姓名", "項目"], keep="last"
+                    )
+
+                    # 3. 寫回工作表
+                    conn.update(worksheet="Analysis_Results", data=updated_df)
+                    st.success(f"✅ {sel_name} 的紀錄已更新！")
                     st.balloons()
                 except Exception as e:
                     st.error(f"存檔失敗：{e}")
