@@ -278,7 +278,7 @@ with tab_ai:
     else:
         last_rec = score_row.iloc[-1]
         
-        # --- 【核心：嚴禁亂編分數 - 完整保留】 ---
+        # --- 【重要核心指令：嚴禁亂編分數 - 100% 完整保留】 ---
         # 直接抓取常模轉換後的數值 (例如：69)
         raw_val = last_rec.get("等第/獎牌")
         data_score = pd.to_numeric(raw_val, errors='coerce')
@@ -288,10 +288,11 @@ with tab_ai:
             st.error(f"🛑 錯誤：【等第/獎牌】欄位無有效分數，請檢查常模表或重新錄入。")
             st.stop()
 
-        # --- 【核心：精確參照 AI_Criteria 權重與指標】 ---
+        # --- 【重要核心指令：精確參照 AI_Criteria 權重與指標】 ---
         c_rows = df_criteria[df_criteria["測驗項目"] == sel_item]
         if c_rows.empty:
-            st.error(f"❌ AI_Criteria 表中找不到項目：{sel_item}"); st.stop()
+            st.error(f"❌ AI_Criteria 表中找不到項目：{sel_item}")
+            st.stop()
         
         c_row = c_rows.iloc[0]
         # 抓取權重邏輯
@@ -323,7 +324,8 @@ with tab_ai:
         # --- AI 分析執行 (完整保留您的三步驟邏輯與偵錯指令) ---
         st.divider()
         if st.button("🚀 開始執行 AI 綜合診斷", use_container_width=True):
-            if not up_v: st.warning("⚠️ 請上傳影片後再執行。")
+            if not up_v: 
+                st.warning("⚠️ 請上傳影片後再執行。")
             else:
                 with st.spinner("AI 正在核對項目並分析動作技術..."):
                     try:
@@ -331,8 +333,10 @@ with tab_ai:
                         with open(temp_path, "wb") as f: f.write(up_v.read())
                         video_file = genai.upload_file(path=temp_path)
                         while video_file.state.name == "PROCESSING":
-                            time.sleep(2); video_file = genai.get_file(video_file.name)
+                            time.sleep(2)
+                            video_file = genai.get_file(video_file.name)
                         
+                        # 您要求的專業三步驟 Prompt
                         full_prompt = f"""
                         角色設定：{ai_context}
                         預期測驗項目：{sel_item}
@@ -351,6 +355,7 @@ with tab_ai:
                         請務必在結尾回傳格式：技術分：XX分。
                         """
                         
+                        # 嚴格控制 Temperature=0
                         model = genai.GenerativeModel(MODEL_ID, generation_config={"temperature": 0})
                         response = model.generate_content([video_file, full_prompt])
                         
@@ -368,7 +373,7 @@ with tab_ai:
                     except Exception as e:
                         st.error(f"AI 分析失敗：{e}")
 
-        # --- 【最終加權核定區 - 嚴謹計算與去重存檔】 ---
+        # --- 【最終加權核定區 - 欄位對齊精簡版】 ---
         if st.session_state.get('ai_done'):
             st.markdown("### 📝 AI 專業診斷報告")
             st.info(st.session_state['ai_report'])
@@ -387,33 +392,38 @@ with tab_ai:
             with m2: st.metric("技術加權項", f"{actual_tech_w:.1f}", f"權重 {int(w_tech*100)}%")
             with m3: st.metric("✅ 最終建議總分", f"{total_sum:.1f}")
 
+            # 存檔按鈕：對齊 Analysis_Results 您保留的長標題
             if st.button("💾 確認存入 Analysis_Results", use_container_width=True):
                 try:
-                    # 1. 準備新資料 (統一轉為字串避免 Arrow 類型錯誤)
                     new_entry = {
                         "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                        "班級": str(sel_class), "姓名": str(sel_name), "項目": str(sel_item),
-                        "數據分數": str(data_score), "技術分數": str(tech_input), 
-                        "最終修訂分數": str(round(total_sum, 2)), 
-                        "AI診斷報告": str(st.session_state['ai_report']), "老師評語": "" 
+                        "班級": str(sel_class), 
+                        "姓名": str(sel_name), 
+                        "項目": str(sel_item),
+                        "數據分數": str(data_score),         # 長標題
+                        "技術分數": str(tech_input),        # 長標題
+                        "最終修訂分數": str(round(total_sum, 2)), # 長標題
+                        "AI診斷報告": str(st.session_state['ai_report']), 
+                        "老師評語": "",
+                        "老師修正總分": ""
                     }
                     new_df = pd.DataFrame([new_entry]).astype(str)
 
-                    # 2. 讀取現有紀錄並進行不重複處理
+                    # 讀取現有紀錄
                     old_df = conn.read(worksheet="Analysis_Results")
                     old_df = old_df.astype(str)
 
-                    # 合併後保留最後一次（最新）紀錄
+                    # 合併後保留最後一次（最新）紀錄，解決重複存檔問題
                     updated_df = pd.concat([old_df, new_df], ignore_index=True).drop_duplicates(
                         subset=["姓名", "項目"], keep="last"
                     )
 
-                    # 3. 寫回 Sheets
+                    # 寫回 Sheets
                     conn.update(worksheet="Analysis_Results", data=updated_df)
                     st.success(f"✅ {sel_name} 的紀錄已更新！")
                     st.balloons()
                 except Exception as e:
-                    st.error(f"存檔失敗：{e}")
+                    st.error(f"存檔失敗，請確認標題是否完全一致：{e}")
 
 # [分頁 3：數據管理]
 with tab_manage:
