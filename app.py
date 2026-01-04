@@ -275,65 +275,135 @@ with tab_ai:
 
     st.divider()
 
-    # --- 4. 執行 AI 診斷 (強化偵錯：視覺 + 試算表指標) ---
-    if st.button(f"🚀 執行 {sel_item} 專業診斷", use_container_width=True):
-        if not up_v: st.warning("⚠️ 請上傳影片後再執行。")
+    # [分頁 2：AI 智慧診斷 - 最終完整不變動版]
+with tab_ai:
+    # --- 1. 取得學生數據成績 (嚴格保留原始邏輯與欄位) ---
+    score_row = df_scores[(df_scores["姓名"] == sel_name) & (df_scores["項目"] == sel_item)]
+    if score_row.empty:
+        st.error(f"❌ 找不到學生【{sel_name}】的數據成績。請先至『成績錄入』完成存檔。")
+        st.stop()
+    
+    last_rec = score_row.iloc[-1]
+    raw_val = last_rec.get("等第/獎牌")
+    data_score = pd.to_numeric(raw_val, errors='coerce')
+    
+    if pd.isna(data_score):
+        st.error(f"🛑 錯誤：【等第/獎牌】欄位無有效分數，無法進行後續權重計算。")
+        st.stop()
+
+    # --- 2. 參照原有模組與欄位 (完全對接 df_criteria，不作任何邏輯精簡) ---
+    c_rows = df_criteria[df_criteria["測驗項目"] == sel_item]
+    if c_rows.empty:
+        st.error(f"❌ AI_Criteria 表中找不到項目：{sel_item}")
+        st.stop()
+    
+    c_row = c_rows.iloc[0]
+    
+    # 使用原始的權重解析函式 parse_logic_weights
+    w_data, w_tech = parse_logic_weights(str(c_row.get("評分權重 (Scoring_Logic)", "數據(70%), 技術(30%)")))
+    
+    # 嚴格對接試算表欄位名稱
+    indicators = str(c_row.get("具體指標 (Indicators)", ""))
+    ai_context = str(c_row.get("AI 指令脈絡 (AI_Context)", "專業體育老師"))
+    ai_cues    = str(c_row.get("專業指令與建議 (Cues)", ""))
+    unit_str   = str(c_row.get("數據單位 (Data_Unit)", ""))
+
+    # --- 3. 介面佈局 (完整保留 UI 設計與資訊顯示) ---
+    col_i, col_v = st.columns([1, 1.2])
+    with col_i:
+        st.subheader("📊 診斷參考數據")
+        st.info(f"👤 學生：{sel_name} | 🎯 項目：**{sel_item}**")
+        st.metric("數據得分 (常模轉換)", f"{data_score} 分") 
+        st.caption(f"原始紀錄：{last_rec['成績']} {unit_str}")
+        st.warning(f"⚖️ 權重分配：數據 {int(w_data*100)}% / 技術 {int(w_tech*100)}%")
+        
+        with st.expander("🔍 檢視技術指標與評分規準 (Indicators)"):
+            st.markdown(f"**【具體指標】**\n{indicators}")
+            st.markdown(f"**【指令建議 (Cues)】**\n{ai_cues}")
+    
+    with col_v:
+        st.subheader("📹 動作影像上傳")
+        up_v = st.file_uploader(f"請上傳【{sel_item}】診斷影片", type=["mp4", "mov"])
+        if up_v: 
+            st.video(up_v)
+
+    st.divider()
+
+    # --- 4. 執行 AI 診斷 (重大修正：視覺偵錯 + 階層式評分邏輯) ---
+    if st.button(f"🚀 開始執行 {sel_item} AI 綜合診斷", use_container_width=True):
+        if not up_v: 
+            st.warning("⚠️ 請上傳影片後再執行。")
         else:
-            with st.spinner(f"正在以『{sel_item}』指標進行深度校驗..."):
+            with st.spinner(f"正在以最高級別考官身分進行嚴格分析中..."):
                 try:
+                    # 影片處理流程
                     temp_path = "temp_analysis.mp4"
-                    with open(temp_path, "wb") as f: f.write(up_v.read())
+                    with open(temp_path, "wb") as f: 
+                        f.write(up_v.read())
                     
                     video_file = genai.upload_file(path=temp_path)
                     while video_file.state.name == "PROCESSING":
-                        time.sleep(2); video_file = genai.get_file(video_file.name)
+                        time.sleep(2)
+                        video_file = genai.get_file(video_file.name)
                     
-                    # 【核心修正：將 AI_Context 與 Indicators 設為絕對審核標準】
+                    # 【核心 Prompt：整合 偵錯、診斷、規準評分】
                     full_prompt = f"""
                     【身分設定：最高級別考官】
-                    你的身分與專業脈絡為：{ai_context}
+                    專業脈絡：{ai_context}
                     
                     【受測項目：{sel_item}】
-                    請根據以下試算表規範之「具體指標 (Indicators)」進行嚴格審核：
-                    "{indicators}"
-
-                    ### 第一階段：視覺與指標對照偵錯 (Visual Compliance Check)
-                    1. 你必須先比對影片動作是否符合上述「{sel_item}」的具體指標。
+                    
+                    ### 第一階段：視覺與指標對照偵錯 (Compliance Check)
+                    1. 你必須先比對影片動作是否符合上述「{sel_item}」的具體指標："{indicators}"。
                     2. 重點偵錯：
                        - 如果指標寫了「單手持球起始」但影片是「雙手準備墊球」，則判定為項目錯誤。
                        - 如果指標寫了「球徑不可垂直高拋」但影片有「明顯垂直高拋」，則判定為項目錯誤。
-                    3. 若發現項目不符，請立即終止分析並回報：
-                       🛑 項目偵錯錯誤。理由：[具體說明觀測動作與指標 "{indicators}" 的衝突點，例如：偵測到雙手合攏對稱動作，不符合發球項目之單手揮擊指標]。
+                    3. 若發現項目不符，請立即停止分析並回報：
+                       🛑 項目偵錯錯誤。理由：[具體說明觀測動作與指標 "{indicators}" 的衝突點]。
 
-                    ### 第二階段：技術診斷報告
+                    ### 第二階段：專業技術診斷報告
                     (僅在第一階段通過時執行)
-                    參考引導建議：{ai_cues}
+                    參考建議：{ai_cues}
                     
                     格式：
-                    1. [確認動作]：(描述觀察到的特徵)
+                    1. [確認動作]：(描述觀察到的特徵，例如擊球點、發力順序)
                     2. [關鍵優化]：(精確指出技術缺失，嚴禁美化)
-                    3. [訓練處方]：(提供具體練習建議)
+                    3. [訓練處方]：(提供具體練習動作建議)
 
-                    ### 第三階段：技術評分
-                    根據指標 "{indicators}" 的達成程度給予 0-100 分。
+                    ### 第三階段：技術評分 (Scoring Rubric)
+                    你必須嚴格遵守以下由「具體指標 (Indicators)」所定義的評分規準：
+                    "{indicators}"
+                    
+                    【給分執行細則】：
+                    1. 視指標為「條件分支」。若指標內容註明「達成某項給予XX分」，你必須優先執行該指令。
+                    2. 若指標未列出具體分數區間，請依據完成度判定：
+                       - 完全達成所有指標：90-100分
+                       - 達成大部分但有小瑕疵：80-89分
+                       - 僅達成基礎要領（例如：達成指標 1 項者）：75分以上
+                       - 未達標或嚴重錯誤：70分以下
+                    
                     格式：技術分：XX分。
                     """
 
                     model = genai.GenerativeModel(MODEL_ID, generation_config={"temperature": 0})
                     response = model.generate_content([video_file, full_prompt])
                     
+                    # 結果處理邏輯
                     if "🛑" in response.text:
                         st.error(response.text)
                         st.session_state['ai_done'] = False
                     else:
+                        # 擷取技術分數
                         score_match = re.search(r"技術分：(\d+)", response.text)
                         st.session_state['ai_tech_score'] = int(score_match.group(1)) if score_match else 80
                         st.session_state['ai_report'] = response.text
                         st.session_state['ai_done'] = True
                     
+                    # 清除雲端與本地暫存檔
                     genai.delete_file(video_file.name)
                     if os.path.exists(temp_path): os.remove(temp_path)
-                except Exception as e: st.error(f"AI 失敗：{e}")
+                except Exception as e: 
+                    st.error(f"AI 診斷失敗：{e}")
 
     # --- 5. 顯示結果與存檔 (完整保留原始計算與連動邏輯) ---
     if st.session_state.get('ai_done'):
@@ -341,16 +411,16 @@ with tab_ai:
         st.info(st.session_state['ai_report'])
         st.divider()
         
-        # 老師手動核定分數 (保持連動)
+        # 老師手動核定分數 (預設為 AI 給分)
         tech_input = st.number_input(f"核定技術評分 (技術佔比 {int(w_tech*100)}%)", 0, 100, value=int(st.session_state.get('ai_tech_score', 80)))
         
-        # 核心總分計算連動公式
+        # 核心總分計算公式：(數據得分 * 數據權重) + (技術得分 * 技術權重)
         actual_data_w = data_score * w_data
         actual_tech_w = tech_input * w_tech
         total_sum = actual_data_w + actual_tech_w
 
         st.markdown(f"#### 🏆 最終建議總分：{total_sum:.1f}")
-        st.caption(f"計算公式：({data_score} × {w_data}) + ({tech_input} × {w_tech})")
+        st.caption(f"計算公式明細：({data_score} × {w_data:.2f}) + ({tech_input} × {w_tech:.2f})")
 
         if st.button("💾 確認結果並存入 Analysis_Results", use_container_width=True):
             try:
@@ -359,13 +429,17 @@ with tab_ai:
                     "班級": str(sel_class), "姓名": str(sel_name), "項目": str(sel_item),
                     "數據分數": str(data_score), "技術分數": str(tech_input),
                     "最終修訂分數": str(round(total_sum, 2)),
-                    "AI診斷報告": str(st.session_state['ai_report']), "老師評語": "", "老師修正總分": ""
+                    "AI診斷報告": str(st.session_state['ai_report']), 
+                    "老師評語": "", 
+                    "老師修正總分": ""
                 }
+                # 讀取現有紀錄並合併 (保持唯一性，更新最新紀錄)
                 old_df = conn.read(worksheet="Analysis_Results").astype(str)
                 updated_df = pd.concat([old_df, pd.DataFrame([new_entry])], ignore_index=True).drop_duplicates(subset=["姓名", "項目"], keep="last")
                 conn.update(worksheet="Analysis_Results", data=updated_df)
-                st.success(f"✅ {sel_name} 的紀錄已成功存檔！"); st.balloons()
-            except Exception as e: st.error(f"存檔失敗：{e}")
+                st.success(f"✅ {sel_name} 的診斷紀錄已成功存檔至資料庫！"); st.balloons()
+            except Exception as e: 
+                st.error(f"資料庫存檔失敗：{e}")
 
 # [分頁 3：數據管理]
 with tab_manage:
