@@ -76,23 +76,36 @@ def parse_time_to_seconds(time_str):
 def universal_judge(item, gender, age, value, norms_df):
     """回傳 (等第, 數值分數)"""
     try:
-        mask = (norms_df['項目名稱'] == item) & (norms_df['性別'] == gender)
+        # 過濾項目與性別
+        mask = (norms_df['項目名稱'].astype(str) == str(item)) & \
+               (norms_df['性別'].astype(str) == str(gender))
+        
         f = norms_df[mask].copy()
         if f.empty: return "無常模", 60
         
         v = parse_time_to_seconds(value)
         comp = f['比較方式'].iloc[0]
-        score_map = {"優": 100, "甲": 85, "乙": 75, "丙": 65, "丁": 55, "金牌": 100, "銀牌": 85, "銅牌": 75, "待加強": 60}
         
-        f['門檻值_num'] = f['門檻值'].astype(float)
+        # 轉換門檻值為數字
+        f['門檻值_num'] = pd.to_numeric(f['門檻值'], errors='coerce')
         f = f.sort_values('門檻值_num', ascending=(comp == "<="))
         
-        result = "待加強"
+        # --- 【核心修正點】 ---
+        # 遍歷每一列，找到符合區間的那一列
         for _, row in f.iterrows():
-            if (comp == ">=" and v >= row['門檻值_num']) or (comp == "<=" and v <= row['門檻值_num']):
-                result = row['判定結果']; break
-        return result, score_map.get(result, 60)
-    except: return "判定錯誤", 0
+            if (comp == ">=" and v >= row['門檻值_num']) or \
+               (comp == "<=" and v <= row['門檻值_num']):
+                
+                # 直接抓取表格中的 '分數' 欄位值 (例如 69)
+                # 若您的表格欄位標題不是「分數」，請修改下方欄位名
+                raw_score = row.get('分數', 60) 
+                
+                # 回傳結果與試算表中的實際分數
+                return row['判定結果'], int(float(raw_score))
+        
+        return "待加強", 60
+    except Exception as e:
+        return f"判定錯誤: {e}", 0
 
 def parse_logic_weights(logic_str):
     """解析 Logic 欄位中的百分比，例如 '數據分(70%), 技術分(30%)'"""
