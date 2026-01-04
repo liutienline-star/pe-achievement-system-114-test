@@ -227,54 +227,6 @@ if not recent.empty:
 else:
     st.caption(f"✨ 目前尚無 {sel_name} 在「{sel_item}」項目的歷史紀錄")
 
-# [分頁 2：AI 智慧診斷 - 偵錯加固且不變動功能版]
-with tab_ai:
-    # --- 1. 取得學生數據成績 (完整保留原始邏輯) ---
-    score_row = df_scores[(df_scores["姓名"] == sel_name) & (df_scores["項目"] == sel_item)]
-    if score_row.empty:
-        st.error(f"❌ 找不到學生【{sel_name}】的數據成績。請先至『成績錄入』完成存檔。"); st.stop()
-    
-    last_rec = score_row.iloc[-1]
-    raw_val = last_rec.get("等第/獎牌")
-    data_score = pd.to_numeric(raw_val, errors='coerce')
-    
-    if pd.isna(data_score):
-        st.error(f"🛑 錯誤：【等第/獎牌】欄位無有效分數。"); st.stop()
-
-    # --- 2. 參照原有的模組與欄位 (完全對接 df_criteria，不作簡化) ---
-    c_rows = df_criteria[df_criteria["測驗項目"] == sel_item]
-    if c_rows.empty:
-        st.error(f"❌ AI_Criteria 表中找不到項目：{sel_item}"); st.stop()
-    
-    c_row = c_rows.iloc[0]
-    
-    # 權重解析 (保留原有的 parse_logic_weights)
-    w_data, w_tech = parse_logic_weights(str(c_row.get("評分權重 (Scoring_Logic)", "數據(70%), 技術(30%)")))
-    
-    # 提取您的 Sheet 核心參照
-    indicators = str(c_row.get("具體指標 (Indicators)", ""))
-    ai_context = str(c_row.get("AI 指令脈絡 (AI_Context)", "專業體育老師"))
-    ai_cues    = str(c_row.get("專業指令與建議 (Cues)", ""))
-    unit_str   = str(c_row.get("數據單位 (Data_Unit)", ""))
-
-    # --- 3. 介面佈局 (保留所有 UI 元素) ---
-    col_i, col_v = st.columns([1, 1.2])
-    with col_i:
-        st.subheader("📊 診斷參考數據")
-        st.info(f"👤 學生：{sel_name} | 🎯 項目：**{sel_item}**")
-        st.metric("數據得分 (常模轉換)", f"{data_score} 分") 
-        st.caption(f"原始紀錄：{last_rec['成績']} {unit_str}")
-        st.warning(f"⚖️ 權重分配：數據 {int(w_data*100)}% / 技術 {int(w_tech*100)}%")
-        with st.expander("🔍 檢視 Sheet 技術指標 (Indicators)"):
-            st.write(indicators)
-    
-    with col_v:
-        st.subheader("📹 動作影像上傳")
-        up_v = st.file_uploader(f"請上傳【{sel_item}】診斷影片", type=["mp4", "mov"])
-        if up_v: st.video(up_v)
-
-    st.divider()
-
     # [分頁 2：AI 智慧診斷 - 最終完整不變動版]
 with tab_ai:
     # --- 1. 取得學生數據成績 (嚴格保留原始邏輯與欄位) ---
