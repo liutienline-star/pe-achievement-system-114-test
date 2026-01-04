@@ -98,7 +98,7 @@ def parse_logic_weights(logic_str):
     except: pass
     return 0.7, 0.3
 
-# --- 4. 側邊欄 (強化連動同步版) ---
+# --- 4. 側邊欄 (修正變數賦值版) ---
 with st.sidebar:
     st.header("👤 學生與項目選擇")
     
@@ -118,29 +118,28 @@ with st.sidebar:
     seat_list = stu_df["座號"].tolist()
     name_list = stu_df["姓名"].tolist()
 
-    # --- 同步邏輯開始 ---
-    # 初始化 session_state
+    # 初始化 session_state 索引
     if "current_stu_idx" not in st.session_state:
         st.session_state.current_stu_idx = 0
 
-    # 定義回呼函式：當座號改變時更新索引
-    def on_seat_change():
-        new_seat = st.session_state.seat_input
-        if new_seat in seat_list:
-            st.session_state.current_stu_idx = seat_list.index(new_seat)
+    # 確保索引不會超出目前班級的人數範圍 (切換班級時很重要)
+    if st.session_state.current_stu_idx >= len(seat_list):
+        st.session_state.current_stu_idx = 0
 
-    # 定義回呼函式：當姓名改變時更新索引
+    # 定義同步回呼
+    def on_seat_change():
+        if st.session_state.seat_input in seat_list:
+            st.session_state.current_stu_idx = seat_list.index(st.session_state.seat_input)
+
     def on_name_change():
-        new_name = st.session_state.name_selector
-        if new_name in name_list:
-            st.session_state.current_stu_idx = name_list.index(new_name)
+        if st.session_state.name_selector in name_list:
+            st.session_state.current_stu_idx = name_list.index(st.session_state.name_selector)
 
     # 顯示輸入框與下拉選單
     col_seat, col_name = st.columns([1, 2])
     
     with col_seat:
-        # 座號輸入/選擇
-        st.selectbox(
+        sel_seat = st.selectbox(
             "座號", 
             seat_list, 
             index=st.session_state.current_stu_idx,
@@ -149,8 +148,8 @@ with st.sidebar:
         )
 
     with col_name:
-        # 姓名選擇
-        st.selectbox(
+        # 【關鍵修正：賦值給 sel_name】
+        sel_name = st.selectbox(
             "2. 選擇學生", 
             name_list, 
             index=st.session_state.current_stu_idx,
@@ -158,20 +157,16 @@ with st.sidebar:
             on_change=on_name_change
         )
 
-    # --- 根據最終同步後的索引抓取資料 ---
+    # 抓取當前學生完整資料，供後續程式碼使用
     curr_stu = stu_df.iloc[st.session_state.current_stu_idx]
     
-    # 確保顯示的資訊是連動後的最新狀態
     st.success(f"📌 {curr_stu['姓名']} ({curr_stu['座號']}號)")
     st.info(f"性別：{curr_stu['性別']} | 年齡：{curr_stu['年齡']}歲")
-    
-    # --- 同步邏輯結束 ---
 
     st.divider()
     if st.button("🚪 登出", use_container_width=True):
         st.session_state["password_correct"] = False
         st.rerun()
-
 # --- 5. 主介面分頁 ---
 tab_entry, tab_ai, tab_manage = st.tabs(["📝 成績錄入", "🚀 AI 智慧診斷", "📊 數據報表與管理"])
 
