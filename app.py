@@ -98,62 +98,75 @@ def parse_logic_weights(logic_str):
     except: pass
     return 0.7, 0.3
 
-# --- 4. 側邊欄 (增加座號同步選擇功能) ---
+# --- 4. 側邊欄 (強化連動同步版) ---
 with st.sidebar:
     st.header("👤 學生與項目選擇")
     
     # 1. 選擇班級
     all_classes = sorted(df_student_list["班級"].unique())
-    sel_class = st.selectbox("1. 選擇班級", all_classes)
+    sel_class = st.selectbox("1. 選擇班級", all_classes, key="class_selector")
     
-    # 篩選該班級學生
+    # 篩選班級資料並確保排序
     stu_df = df_student_list[df_student_list["班級"] == sel_class].copy()
-    
-    # 確保座號是數字排序 (先轉型為 int 再排序，避免出現 1, 10, 2 這種排序)
     try:
         stu_df['座號_int'] = stu_df['座號'].astype(int)
         stu_df = stu_df.sort_values('座號_int')
     except:
         stu_df = stu_df.sort_values('座號')
 
-    # 準備選項清單
+    # 準備名單清單
     seat_list = stu_df["座號"].tolist()
     name_list = stu_df["姓名"].tolist()
 
-    # 建立連動邏輯
+    # --- 同步邏輯開始 ---
+    # 初始化 session_state
+    if "current_stu_idx" not in st.session_state:
+        st.session_state.current_stu_idx = 0
+
+    # 定義回呼函式：當座號改變時更新索引
+    def on_seat_change():
+        new_seat = st.session_state.seat_input
+        if new_seat in seat_list:
+            st.session_state.current_stu_idx = seat_list.index(new_seat)
+
+    # 定義回呼函式：當姓名改變時更新索引
+    def on_name_change():
+        new_name = st.session_state.name_selector
+        if new_name in name_list:
+            st.session_state.current_stu_idx = name_list.index(new_name)
+
+    # 顯示輸入框與下拉選單
     col_seat, col_name = st.columns([1, 2])
     
     with col_seat:
-        # 如果 session_state 還沒有紀錄，預設選第一個
-        if f"seat_idx_{sel_class}" not in st.session_state:
-            st.session_state[f"seat_idx_{sel_class}"] = 0
-            
-        sel_seat = st.selectbox(
+        # 座號輸入/選擇
+        st.selectbox(
             "座號", 
             seat_list, 
-            index=st.session_state[f"seat_idx_{sel_class}"],
-            key=f"sb_seat_{sel_class}"
+            index=st.session_state.current_stu_idx,
+            key="seat_input",
+            on_change=on_seat_change
         )
-        # 更新當前索引
-        current_idx = seat_list.index(sel_seat)
-        st.session_state[f"seat_idx_{sel_class}"] = current_idx
 
     with col_name:
-        sel_name = st.selectbox(
-            "2. 選擇學生姓名", 
+        # 姓名選擇
+        st.selectbox(
+            "2. 選擇學生", 
             name_list, 
-            index=st.session_state[f"seat_idx_{sel_class}"],
-            key=f"sb_name_{sel_class}"
+            index=st.session_state.current_stu_idx,
+            key="name_selector",
+            on_change=on_name_change
         )
-        # 再次確保索引同步（如果使用者改選姓名，也會同步座號）
-        current_idx = name_list.index(sel_name)
-        st.session_state[f"seat_idx_{sel_class}"] = current_idx
 
-    # 取得最終選定的學生資料
-    curr_stu = stu_df.iloc[st.session_state[f"seat_idx_{sel_class}"]]
+    # --- 根據最終同步後的索引抓取資料 ---
+    curr_stu = stu_df.iloc[st.session_state.current_stu_idx]
     
-    st.success(f"📌 {curr_stu['姓名']} ({curr_stu['座號']}號)\n\n性別：{curr_stu['性別']} | 年齡：{curr_stu['年齡']}歲")
+    # 確保顯示的資訊是連動後的最新狀態
+    st.success(f"📌 {curr_stu['姓名']} ({curr_stu['座號']}號)")
+    st.info(f"性別：{curr_stu['性別']} | 年齡：{curr_stu['年齡']}歲")
     
+    # --- 同步邏輯結束 ---
+
     st.divider()
     if st.button("🚪 登出", use_container_width=True):
         st.session_state["password_correct"] = False
