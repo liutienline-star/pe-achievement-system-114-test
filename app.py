@@ -120,7 +120,7 @@ with st.sidebar:
 # --- 6. 主介面分頁 ---
 tab_entry, tab_ai, tab_manage = st.tabs(["📝 成績錄入", "🚀 AI 智慧診斷", "📊 數據報表與管理"])
 
-# [分頁 1：成績錄入]
+# [分頁 1：成績錄入 - 背景自動計算版]
 with tab_entry:
     col1, col2 = st.columns(2)
     with col1:
@@ -131,7 +131,6 @@ with tab_entry:
         
     with col2:
         fmt = st.selectbox("📏 格式", ["純數字 (次數/分數)", "秒數 (分:秒)", "秒數 (00.00)"])
-        auto_j = st.checkbox("🤖 自動換算分數", value=True)
         
         if "分:秒" in fmt:
             c1, c2 = st.columns(2)
@@ -142,33 +141,54 @@ with tab_entry:
         else:
             final_val = st.text_input("📊 輸入數值", "0")
 
+    # --- 【關鍵修改：背景運算】 ---
+    # 雖然不顯示在 UI 上，但程式依然在後台計算出 res_medal 和 res_score
     res_medal, res_score = universal_judge(sel_item, curr_stu['性別'], curr_stu['年齡'], final_val, df_norms)
+    
+    # 原本的 st.metric("判定等第"...) 已被刪除，介面保持清爽
     st.divider()
-    st.metric("判定等第", res_medal, f"對應分數：{res_score}")
 
-    # 歷史紀錄對照 (找回功能)
-    st.write("🕒 **近期測驗紀錄：**")
+    # 歷史紀錄對照 (這裡我們也隱藏等第，只顯示時間和成績)
+    st.write("🕒 **該生近期紀錄：**")
     recent = df_scores[(df_scores['姓名'] == sel_name) & (df_scores['項目'] == sel_item)].tail(3)
-    st.dataframe(recent[['紀錄時間', '成績', '等第/獎牌']], use_container_width=True)
+    if not recent.empty:
+        st.dataframe(recent[['紀錄時間', '成績']], use_container_width=True)
+    else:
+        st.caption("暫無歷史紀錄")
 
-    if st.button("💾 儲存並同步至 Scores"):
+    if st.button("💾 儲存並同步成績"):
+        # 在儲存時，將背景算好的 res_medal 寫入「等第/獎牌」欄位
         new_row = {
             "紀錄時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "班級": sel_class, "座號": curr_stu['座號'], "姓名": sel_name,
-            "測驗類別": test_cat, "項目": sel_item, "成績": final_val,
-            "顯示格式": fmt, "等第/獎牌": res_medal, "備註": ""
+            "班級": sel_class, 
+            "座號": curr_stu['座號'], 
+            "姓名": sel_name,
+            "測驗類別": test_cat, 
+            "項目": sel_item, 
+            "成績": final_val,
+            "顯示格式": fmt, 
+            "等第/獎牌": res_medal,  # <--- 這裡依然會儲存判定結果
+            "備註": ""
         }
-        # 覆蓋或新增
+        
+        # 覆蓋或新增邏輯
         mask = (df_scores['姓名'] == sel_name) & (df_scores['項目'] == sel_item)
         if mask.any():
-            for k, v in new_row.items(): df_scores.loc[mask, k] = str(v)
+            for k, v in new_row.items(): 
+                df_scores.loc[mask, k] = str(v)
             final_df = df_scores
         else:
             final_df = pd.concat([df_scores, pd.DataFrame([new_row])], ignore_index=True)
         
-        conn.update(worksheet="Scores", data=final_df)
-        st.success("✅ 成績已同步！"); st.rerun()
-
+        try:
+            conn.update(worksheet="Scores", data=final_df)
+            st.success(f"✅ {sel_name} 的成績 ({final_val}) 已成功同步到 Scores！")
+            # 存檔後給予氣球回饋，讓老師知道成功了，雖然沒看到分數判定
+            st.balloons() 
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.error(f"存檔發生錯誤：{e}")
 # [分頁 2：AI 智慧診斷 - 100% 完整還原強化版]
 with tab_ai:
     # 1. 讀取該生該項目的最新成績
