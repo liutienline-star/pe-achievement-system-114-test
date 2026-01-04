@@ -98,71 +98,58 @@ def parse_logic_weights(logic_str):
     except: pass
     return 0.7, 0.3
 
-# --- 4. 側邊欄 (修正變數賦值版) ---
+# --- 4. 側邊欄 (精準連動版) ---
 with st.sidebar:
     st.header("👤 學生與項目選擇")
     
-    # 1. 選擇班級
+    # 選擇班級
     all_classes = sorted(df_student_list["班級"].unique())
     sel_class = st.selectbox("1. 選擇班級", all_classes, key="class_selector")
     
-    # 篩選班級資料並確保排序
+    # 篩選班級資料並排序座號
     stu_df = df_student_list[df_student_list["班級"] == sel_class].copy()
+    stu_df['座號'] = stu_df['座號'].astype(str).str.strip() # 統一轉為字串處理
     try:
-        stu_df['座號_int'] = stu_df['座號'].astype(int)
+        stu_df['座號_int'] = pd.to_numeric(stu_df['座號'])
         stu_df = stu_df.sort_values('座號_int')
     except:
         stu_df = stu_df.sort_values('座號')
 
-    # 準備名單清單
     seat_list = stu_df["座號"].tolist()
     name_list = stu_df["姓名"].tolist()
 
-    # 初始化 session_state 索引
+    # 初始化 session_state
     if "current_stu_idx" not in st.session_state:
         st.session_state.current_stu_idx = 0
 
-    # 確保索引不會超出目前班級的人數範圍 (切換班級時很重要)
+    # 防呆：切換班級時若索引超出範圍則歸零
     if st.session_state.current_stu_idx >= len(seat_list):
         st.session_state.current_stu_idx = 0
 
-    # 定義同步回呼
-    def on_seat_change():
-        if st.session_state.seat_input in seat_list:
-            st.session_state.current_stu_idx = seat_list.index(st.session_state.seat_input)
+    # 定義同步 Callback
+    def sync_student():
+        # 這個函式用來確保座號與姓名永遠指向同一個 Index
+        if st.session_state.get('sidebar_seat'):
+            st.session_state.current_stu_idx = seat_list.index(st.session_state.sidebar_seat)
+        elif st.session_state.get('sidebar_name'):
+            st.session_state.current_stu_idx = name_list.index(st.session_state.sidebar_name)
 
-    def on_name_change():
-        if st.session_state.name_selector in name_list:
-            st.session_state.current_stu_idx = name_list.index(st.session_state.name_selector)
-
-    # 顯示輸入框與下拉選單
     col_seat, col_name = st.columns([1, 2])
-    
     with col_seat:
-        sel_seat = st.selectbox(
-            "座號", 
-            seat_list, 
-            index=st.session_state.current_stu_idx,
-            key="seat_input",
-            on_change=on_seat_change
-        )
-
+        # 座號選擇
+        st.selectbox("座號", seat_list, index=st.session_state.current_stu_idx, 
+                     key="sidebar_seat", on_change=sync_student)
     with col_name:
-        # 【關鍵修正：賦值給 sel_name】
-        sel_name = st.selectbox(
-            "2. 選擇學生", 
-            name_list, 
-            index=st.session_state.current_stu_idx,
-            key="name_selector",
-            on_change=on_name_change
-        )
+        # 姓名選擇 (此處 sel_name 會被後續程式碼引用)
+        sel_name = st.selectbox("2. 選擇學生", name_list, index=st.session_state.current_stu_idx, 
+                                key="sidebar_name", on_change=sync_student)
 
-    # 抓取當前學生完整資料，供後續程式碼使用
+    # 取得當前學生完整資料物件
     curr_stu = stu_df.iloc[st.session_state.current_stu_idx]
     
-    st.success(f"📌 {curr_stu['姓名']} ({curr_stu['座號']}號)")
+    st.success(f"📌 {sel_name} ({curr_stu['座號']}號)")
     st.info(f"性別：{curr_stu['性別']} | 年齡：{curr_stu['年齡']}歲")
-
+    
     st.divider()
     if st.button("🚪 登出", use_container_width=True):
         st.session_state["password_correct"] = False
@@ -203,14 +190,27 @@ with tab_entry:
         conn.update(worksheet="Scores", data=updated_scores)
         st.success(f"✅ {sel_name} 的數據成績 {res_score} 分已存入！")
 
-    st.divider()
-    st.write(f"🕒 **{sel_name} - {sel_item} 近期紀錄：**")
-    recent = df_scores[(df_scores['姓名'] == sel_name) & (df_scores['項目'] == sel_item)].copy()
-    if not recent.empty:
-        display_df = recent[['紀錄時間', '成績', '等第/獎牌']].copy()
-        display_df.columns = ['紀錄時間', '原始紀錄(成績)', '數據分數(常模分數)']
-        st.dataframe(display_df.tail(5), use_container_width=True)
-    else: st.caption("✨ 目前尚無此項目的歷史紀錄")
+    # --- [在 tab_entry 分頁中顯示近期紀錄的部分] ---
+st.divider()
+st.write(f"🕒 **{sel_name} - {sel_item} 近期紀錄：**")
+
+# 關鍵修正：使用 .str.strip() 確保比對時不會被空格干擾
+# 並且確保 sel_name 與 sel_item 是從當前 Widgets 取得的最值
+recent = df_scores[
+    (df_scores['姓名'].astype(str).str.strip() == str(sel_name).strip()) & 
+    (df_scores['項目'].astype(str).str.strip() == str(sel_item).strip())
+].copy()
+
+if not recent.empty:
+    # 排序：確保最近的在下面 (或上面，依老師習慣)
+    # 假設有 '紀錄時間' 欄位，我們顯示最近 5 筆
+    display_df = recent[['紀錄時間', '成績', '等第/獎牌']].tail(5)
+    display_df.columns = ['紀錄時間', '原始紀錄(成績)', '數據分數(常模分數)']
+    
+    # 加上 use_container_width=True 讓表格滿版
+    st.dataframe(display_df, use_container_width=True)
+else:
+    st.caption(f"✨ 目前尚無 {sel_name} 在「{sel_item}」項目的歷史紀錄")
 
 # [分頁 2：AI 智慧診斷]
 with tab_ai:
