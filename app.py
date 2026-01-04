@@ -176,38 +176,50 @@ with tab_entry:
     else:
         st.caption("✨ 目前尚無此項目的歷史紀錄")
 
-    # --- 【核心修改 2：儲存邏輯】 ---
-    if st.button("💾 儲存並同步成績", use_container_width=True):
-        new_row = {
-            "紀錄時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "班級": sel_class, 
-            "座號": curr_stu['座號'], 
-            "姓名": sel_name,
-            "測驗類別": test_cat, 
-            "項目": sel_item, 
-            "成績": final_val, # 原始次數/秒數
-            "顯示格式": fmt, 
-            "等第/獎牌": str(res_score), # <--- 將轉換後的 69 分存入此欄位
-            "備註": res_medal # <--- 把「優、甲」等文字存入備註，保持數據分數純淨
-        }
-        
-        # 覆蓋或新增邏輯
-        mask = (df_scores['姓名'] == sel_name) & (df_scores['項目'] == sel_item)
-        if mask.any():
-            for k, v in new_row.items(): 
-                df_scores.loc[mask, k] = str(v)
-            final_df = df_scores
-        else:
-            final_df = pd.concat([df_scores, pd.DataFrame([new_row])], ignore_index=True)
-        
-        try:
-            conn.update(worksheet="Scores", data=final_df)
-            st.success(f"✅ 儲存成功！數據分數：{res_score}")
-            st.balloons() 
-            time.sleep(1)
-            st.rerun()
-        except Exception as e:
-            st.error(f"存檔失敗：{e}")
+    # --- [修正版：防重複存檔邏輯] ---
+            if st.button("💾 確認存入 Analysis_Results", use_container_width=True):
+                try:
+                    # 1. 準備本次要存入的新資料
+                    new_entry = {
+                        "時間": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        "班級": sel_class, 
+                        "姓名": sel_name, 
+                        "項目": sel_item,
+                        "數據分數": data_score, 
+                        "技術分數": tech_input, 
+                        "最終修訂分數": round(total_sum, 2), 
+                        "AI診斷報告": st.session_state['ai_report'], 
+                        "老師評語": "" 
+                    }
+                    new_df = pd.DataFrame([new_entry])
+
+                    # 2. 讀取現有的存檔紀錄
+                    old_df = conn.read(worksheet="Analysis_Results")
+                    
+                    # 確保舊資料與新資料格式一致 (轉為字串避免比對出錯)
+                    old_df = old_df.astype(str)
+                    new_df = new_df.astype(str)
+
+                    # 3. 合併新舊資料
+                    # 我們將新資料放在舊資料後面
+                    combined_df = pd.concat([old_df, new_df], ignore_index=True)
+
+                    # 4. 【關鍵核心】執行去重
+                    # 以「姓名」和「項目」作為唯一識別基準
+                    # keep='last' 表示如果重複，保留最後一次(最新的)診斷紀錄
+                    updated_df = combined_df.drop_duplicates(
+                        subset=["姓名", "項目"], 
+                        keep="last"
+                    )
+
+                    # 5. 將清理後(無重複)的資料寫回 Google Sheets
+                    conn.update(worksheet="Analysis_Results", data=updated_df)
+                    
+                    st.success(f"✅ {sel_name} 的【{sel_item}】診斷紀錄已更新 (已排除重複紀錄)！")
+                    st.balloons()
+                    
+                except Exception as e:
+                    st.error(f"存檔過程中發生錯誤：{e}")
 # --- 輔助函式：解析 Scoring_Logic 權重 ---
 def parse_logic_weights(logic_str):
     import re
