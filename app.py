@@ -98,17 +98,17 @@ def parse_logic_weights(logic_str):
     except: pass
     return 0.7, 0.3
 
-# --- 4. 側邊欄 (精準連動版) ---
+# --- 4. 側邊欄 (修正：保證雙向連動版) ---
 with st.sidebar:
     st.header("👤 學生與項目選擇")
     
-    # 選擇班級
+    # 1. 選擇班級
     all_classes = sorted(df_student_list["班級"].unique())
     sel_class = st.selectbox("1. 選擇班級", all_classes, key="class_selector")
     
     # 篩選班級資料並排序座號
     stu_df = df_student_list[df_student_list["班級"] == sel_class].copy()
-    stu_df['座號'] = stu_df['座號'].astype(str).str.strip() # 統一轉為字串處理
+    stu_df['座號'] = stu_df['座號'].astype(str).str.strip()
     try:
         stu_df['座號_int'] = pd.to_numeric(stu_df['座號'])
         stu_df = stu_df.sort_values('座號_int')
@@ -118,35 +118,50 @@ with st.sidebar:
     seat_list = stu_df["座號"].tolist()
     name_list = stu_df["姓名"].tolist()
 
-    # 初始化 session_state
-    if "current_stu_idx" not in st.session_state:
-        st.session_state.current_stu_idx = 0
+    # --- 核心同步邏輯 ---
+    # 初始化一個全域索引，用來控制兩個選單
+    if f"idx_{sel_class}" not in st.session_state:
+        st.session_state[f"idx_{sel_class}"] = 0
 
-    # 防呆：切換班級時若索引超出範圍則歸零
-    if st.session_state.current_stu_idx >= len(seat_list):
-        st.session_state.current_stu_idx = 0
+    # 當「座號」改變時觸發
+    def sync_by_seat():
+        val = st.session_state.sb_seat
+        st.session_state[f"idx_{sel_class}"] = seat_list.index(val)
 
-    # 定義同步 Callback
-    def sync_student():
-        # 這個函式用來確保座號與姓名永遠指向同一個 Index
-        if st.session_state.get('sidebar_seat'):
-            st.session_state.current_stu_idx = seat_list.index(st.session_state.sidebar_seat)
-        elif st.session_state.get('sidebar_name'):
-            st.session_state.current_stu_idx = name_list.index(st.session_state.sidebar_name)
+    # 當「姓名」改變時觸發
+    def sync_by_name():
+        val = st.session_state.sb_name
+        st.session_state[f"idx_{sel_class}"] = name_list.index(val)
 
+    # 顯示兩個連動的選單
     col_seat, col_name = st.columns([1, 2])
-    with col_seat:
-        # 座號選擇
-        st.selectbox("座號", seat_list, index=st.session_state.current_stu_idx, 
-                     key="sidebar_seat", on_change=sync_student)
-    with col_name:
-        # 姓名選擇 (此處 sel_name 會被後續程式碼引用)
-        sel_name = st.selectbox("2. 選擇學生", name_list, index=st.session_state.current_stu_idx, 
-                                key="sidebar_name", on_change=sync_student)
-
-    # 取得當前學生完整資料物件
-    curr_stu = stu_df.iloc[st.session_state.current_stu_idx]
     
+    with col_seat:
+        # 座號選單
+        sel_seat = st.selectbox(
+            "座號", 
+            seat_list, 
+            index=st.session_state[f"idx_{sel_class}"],
+            key="sb_seat",
+            on_change=sync_by_seat
+        )
+
+    with col_name:
+        # 姓名選單
+        sel_name = st.selectbox(
+            "2. 選擇學生", 
+            name_list, 
+            index=st.session_state[f"idx_{sel_class}"],
+            key="sb_name",
+            on_change=sync_by_name
+        )
+
+    # 取得最終選定的學生物件
+    curr_stu = stu_df.iloc[st.session_state[f"idx_{sel_class}"]]
+    
+    # 強制將姓名導出給後續程式使用
+    sel_name = curr_stu['姓名']
+
     st.success(f"📌 {sel_name} ({curr_stu['座號']}號)")
     st.info(f"性別：{curr_stu['性別']} | 年齡：{curr_stu['年齡']}歲")
     
