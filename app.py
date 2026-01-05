@@ -63,7 +63,7 @@ with st.sidebar:
     stu_df = stu_df.sort_values("座號_int")
     
     # 組合學生選項 (避免 .0)
-    stu_options = [f"【座號 {int(row['座號'])}】{row['姓名']}" for _, row in stu_df.iterrows()]
+    stu_options = [f"【 {int(row['座號'])}】{row['姓名']}" for _, row in stu_df.iterrows()]
     sel_option = st.selectbox("👤 選擇學生", stu_options)
     
     # 提取純姓名
