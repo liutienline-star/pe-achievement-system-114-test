@@ -94,11 +94,26 @@ with col_set:
     indicators = c_row.get("具體指標 (Indicators)", "未設定指標")
     context = c_row.get("AI 指令脈絡 (AI_Context)", "教學診斷與建議")
     
-    # 精準權重解析
-    weights = re.findall(r"(\d+)", str(c_row.get("評分權重 (Scoring_Logic)", "70,30")))
-    w_data_pct = int(weights[0]) if len(weights) >= 2 else 70
-    w_tech_pct = int(weights[1]) if len(weights) >= 2 else 30
-    w_data, w_tech = w_data_pct / 100, w_tech_pct / 100
+    # --- 權重解析修正段落 (請替換此部分) ---
+    raw_logic = str(c_row.get("評分權重 (Scoring_Logic)", "70,30"))
+    # 先抓取所有數字
+    all_nums = [int(n) for n in re.findall(r"(\d+)", raw_logic)]
+    
+    # 【核心修正】：過濾掉小於或等於 5 的數字 (例如序號 1. 或 2.)
+    # 體育權重通常不會設為 5% 以下，以此區隔「項目序號」與「實際權重」
+    filtered_weights = [n for n in all_nums if n > 5]
+    
+    if len(filtered_weights) >= 2:
+        w_data_pct = filtered_weights[0] # 抓到第一個大於 5 的數字 (如 70)
+        w_tech_pct = filtered_weights[1] # 抓到第二個大於 5 的數字 (如 30)
+    else:
+        # 如果解析失敗（數字不足），則提供預設值 70, 30
+        w_data_pct, w_tech_pct = 70, 30 
+    
+    # 轉換成小數點供後續計算使用
+    w_data = w_data_pct / 100
+    w_tech = w_tech_pct / 100
+    # -----------------------------------
     
     with st.expander("🔍 檢視本項 AI 評分指標"):
         st.write(f"**技術規準：**\n{indicators}")
